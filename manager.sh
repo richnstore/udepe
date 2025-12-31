@@ -1,13 +1,10 @@
 #!/bin/bash
 
 # --- 1. PRE-INSTALLATION & DEPENDENCIES ---
-# Install paket wajib
 apt-get update -qq && apt-get install jq vnstat curl wget sudo lsb-release zip unzip net-tools cron iptables-persistent netfilter-persistent -y -qq
 
-# --- 2. FIREWALL PERSISTENCE (CRITICAL FIX) ---
-# Simpan rule yang ada saat ini (dari script lain)
+# --- 2. FIREWALL PERSISTENCE (FITUR V73) ---
 netfilter-persistent save >/dev/null 2>&1
-# Wajib: Aktifkan service agar rule dimuat saat reboot
 systemctl enable netfilter-persistent >/dev/null 2>&1
 systemctl start netfilter-persistent >/dev/null 2>&1
 
@@ -21,7 +18,6 @@ MANAGER_PATH="/usr/local/bin/zivpn-manager.sh"
 SHORTCUT="/usr/local/bin/menu"
 
 mkdir -p "$CONFIG_DIR"
-# Buat file default jika hilang
 [ ! -s "$CONFIG_FILE" ] && echo '{"auth":{"config":[]}, "listen":"0.0.0.0:5667"}' > "$CONFIG_FILE"
 [ ! -s "$META_FILE" ] && echo '{"accounts":[]}' > "$META_FILE"
 
@@ -56,7 +52,7 @@ send_notif() {
 # --- SMART AUTO-SYNC (BACKGROUND PROCESS) ---
 sync_all() {
     {
-        # 1. Force Listen 0.0.0.0 (Agar bisa connect)
+        # 1. Force Listen 0.0.0.0
         local CUR_L=$(jq -r '.listen // "0.0.0.0:5667"' "$CONFIG_FILE")
         if [[ "$CUR_L" != "0.0.0.0:"* ]]; then
             local PORT=$(echo "$CUR_L" | grep -oE '[0-9]+$'); [ -z "$PORT" ] && PORT="5667"
@@ -64,13 +60,11 @@ sync_all() {
             local FORCE_RESTART=true
         fi
 
-        # 2. Hapus User Expired (Dengan validasi tanggal)
+        # 2. Hapus User Expired
         local today=$(date +%s); local meta_changed=false
         while read -r acc; do
             [ -z "$acc" ] && continue
             local user=$(echo "$acc" | jq -r '.user'); local exp=$(echo "$acc" | jq -r '.expired')
-            
-            # Validasi tanggal agar tidak error
             local exp_ts=$(date -d "$exp" +%s 2>/dev/null)
             if [ -n "$exp_ts" ] && [ "$today" -ge "$exp_ts" ]; then
                 jq --arg u "$user" '.accounts |= map(select(.user != $u))' "$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "$META_FILE"
@@ -83,7 +77,6 @@ sync_all() {
         local USERS_META=$(jq -c '.accounts[].user' "$META_FILE" | sort | jq -s '.')
         local USERS_CONF=$(jq -c '.auth.config' "$CONFIG_FILE" | jq -r '.[]' | sort | jq -s '.')
 
-        # Hanya restart jika ada perubahan data
         if [ "$USERS_META" != "$USERS_CONF" ] || [ "$meta_changed" = true ] || [ "$FORCE_RESTART" = true ]; then
             jq --argjson u "$USERS_META" '.auth.config = $u' "$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "$CONFIG_FILE"
             systemctl restart "$SERVICE_NAME"
@@ -91,10 +84,9 @@ sync_all() {
     } >/dev/null 2>&1
 }
 
-# Handler untuk Cronjob
 if [ "$1" == "cron" ]; then sync_all; exit 0; fi
 
-# Fungsi Turbo Tweak (Kernel Only)
+# Fungsi Turbo Tweak
 manage_tweaks() {
     if [ "$1" == "on" ]; then
         cat <<EOT > "$TWEAK_FILE"
@@ -113,7 +105,7 @@ EOT
     fi
 }
 
-# Tampilan Menu Utama
+# --- UI FIX: TAMPILAN PRESISI ---
 draw_header() {
     clear
     local IP=$(curl -s ifconfig.me || echo "No IP"); local UP=$(uptime -p | sed 's/up //')
@@ -121,14 +113,10 @@ draw_header() {
     # Cek Port Service
     local CUR_PORT=$(jq -r '.listen' "$CONFIG_FILE" 2>/dev/null | cut -d':' -f2)
     local BIND_STAT=$(netstat -tulpn | grep ":$CUR_PORT " | grep -v ":::" | awk '{print $4}')
-    [[ ! -z "$BIND_STAT" ]] && PORT_STATUS="${G}Running ($CUR_PORT)${NC}" || PORT_STATUS="${R}Service Down${NC}"
     
-    # Cek Bandwidth (Error Suppressed)
+    # Cek Bandwidth
     local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
-    
-    # Init database vnstat jika corrupt/hilang
     if [ ! -f "/var/lib/vnstat/$IF" ]; then vnstat --create -i "$IF" >/dev/null 2>&1; fi
-    
     local BW_JSON=$(vnstat -i "$IF" --json 2>/dev/null)
     local RX=0; local TX=0
     if [ -n "$BW_JSON" ]; then
@@ -136,20 +124,39 @@ draw_header() {
         RX=$(echo "$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == $T_Y and .date.month == $T_M and .date.day == $T_D) | .rx // 0" 2>/dev/null)
         TX=$(echo "$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == $T_Y and .date.month == $T_M and .date.day == $T_D) | .tx // 0" 2>/dev/null)
     fi
-    # Pastikan variabel tidak kosong
     [[ -z "$RX" || "$RX" == "null" ]] && RX=0
     [[ -z "$TX" || "$TX" == "null" ]] && TX=0
-    
     local BW_STR="↓$(awk -v b="$RX" 'BEGIN {printf "%.2f", b/1024/1024}') MB | ↑$(awk -v b="$TX" 'BEGIN {printf "%.2f", b/1024/1024}') MB"
-    if [ -f "$TWEAK_FILE" ]; then TWEAK_STAT="${G}ON${NC}"; else TWEAK_STAT="${R}OFF${NC}"; fi
 
     echo -e "${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
-    echo -e "${C}┃${NC}       ${Y}ZIVPN MANAGER V73 (PERFECT)${NC}        ${C}┃${NC}"
+    echo -e "${C}┃${NC}        ${Y}ZIVPN MANAGER V74 (UI FIX)${NC}        ${C}┃${NC}"
     echo -e "${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
-    printf "${C}┃${NC} %-12s : %-26s ${C}┃${NC}\n" "IP Address" "$IP"
-    printf "${C}┃${NC} %-12s : %-37s ${C}┃${NC}\n" "Service Port" "$PORT_STATUS"
-    printf "${C}┃${NC} %-12s : %-37s ${C}┃${NC}\n" "Turbo Tweak" "$TWEAK_STAT"
-    printf "${C}┃${NC} %-12s : ${Y}%-26s${NC} ${C}┃${NC}\n" "Daily BW" "$BW_STR"
+    
+    # PERBAIKAN: Gunakan printf terpisah untuk warna agar padding akurat
+    
+    # Baris 1: IP Address
+    printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "IP Address" "$IP"
+    
+    # Baris 2: Uptime (Potong jika terlalu panjang)
+    printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Uptime" "${UP:0:26}"
+    
+    # Baris 3: Service Port (Warna Kondisional)
+    if [[ ! -z "$BIND_STAT" ]]; then
+        printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Service Port" "Running ($CUR_PORT)"
+    else
+        printf " ${C}┃${NC} %-12s : ${R}%-26s${NC} ${C}┃${NC}\n" "Service Port" "Service Down"
+    fi
+    
+    # Baris 4: Turbo Tweak (Warna Kondisional)
+    if [ -f "$TWEAK_FILE" ]; then
+        printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Turbo Tweak" "ON"
+    else
+        printf " ${C}┃${NC} %-12s : ${R}%-26s${NC} ${C}┃${NC}\n" "Turbo Tweak" "OFF"
+    fi
+    
+    # Baris 5: Daily BW
+    printf " ${C}┃${NC} %-12s : ${Y}%-26s${NC} ${C}┃${NC}\n" "Daily BW" "$BW_STR"
+    
     echo -e "${C}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}"
 }
 
@@ -251,11 +258,11 @@ EOF
 chmod +x "/usr/local/bin/zivpn-manager.sh"
 echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT" && chmod +x "$SHORTCUT"
 
-# INSTALL CRON AUTO-HEALING & PERSISTENCE
+# INSTALL CRON
 (crontab -l 2>/dev/null | grep -v "zivpn-manager.sh") | crontab -
 (crontab -l 2>/dev/null; echo "* * * * * /usr/local/bin/zivpn-manager.sh cron") | crontab -
 (crontab -l 2>/dev/null; echo "@reboot /usr/local/bin/zivpn-manager.sh cron") | crontab -
 
 clear
-echo -e "${G}✅ V73 PERFECTED INSTALLED!${NC}"
-echo -e "Fitur firewall persistence telah diaktifkan."
+echo -e "${G}✅ V74 UI PERFECTED INSTALLED!${NC}"
+echo -e "Tampilan menu utama sekarang rapi dan presisi."
