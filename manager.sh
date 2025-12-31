@@ -2,15 +2,15 @@
 
 clear
 echo "=================================================="
-echo "      ZIVPN MANAGER INSTALLER"
-echo "    BY RICH NARENDRA X GEMINI"
+echo "      ZIVPN MANAGER INSTALLER V9.2 (FINAL)"
+echo "    (FIXED SYNTAX + SMART UPDATE + UDP)"
 echo "=================================================="
 echo ""
 
 # URL GitHub Raw milik Anda
 GITHUB_RAW_URL="https://raw.githubusercontent.com/richnstore/udepe/main/manager.sh"
 
-# Input Telegram (Hanya diminta saat instalasi pertama)
+# Input Telegram
 while true; do
     read -p " 🔑 Masukkan Token Bot Telegram: " TG_BOT_TOKEN
     [ ! -z "$TG_BOT_TOKEN" ] && break
@@ -23,19 +23,11 @@ while true; do
     echo " ❌ Chat ID wajib diisi!"
 done
 
-echo ""
-echo "[-] Mengoptimalkan Sistem & Kernel..."
-
 # 1. Install Dependencies
 apt-get update && apt-get install iptables-persistent jq vnstat curl wget sudo -y
 
-# 2. Kernel Tuning (UDP Optimization & IP Forwarding)
-sed -i '/net.ipv4.ip_forward/d' /etc/sysctl.conf
-sed -i '/net.core.rmem/d' /etc/sysctl.conf
-sed -i '/net.core.wmem/d' /etc/sysctl.conf
-sed -i '/net.ipv4.udp/d' /etc/sysctl.conf
-
-cat <<EOF >> /etc/sysctl.conf
+# 2. Kernel Tuning
+cat <<EOF > /etc/sysctl.d/99-zivpn.conf
 net.ipv4.ip_forward = 1
 net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
@@ -45,36 +37,34 @@ net.ipv4.udp_rmem_min = 16384
 net.ipv4.udp_wmem_min = 16384
 net.ipv4.tcp_fastopen = 3
 EOF
-sysctl -p
+sysctl --system
 netfilter-persistent save
 
-# --- KONFIGURASI PATH ---
+# Path
 CONFIG_FILE="/etc/zivpn/config.json"
 META_FILE="/etc/zivpn/accounts_meta.json"
-SERVICE_NAME="zivpn.service"
 MANAGER_SCRIPT="/usr/local/bin/zivpn-manager.sh"
 SHORTCUT="/usr/local/bin/menu"
 
-# 3. Inisialisasi Database
+# 3. Database Init
 mkdir -p /etc/zivpn
 [ ! -s "$CONFIG_FILE" ] && echo '{"auth":{"config":[]}, "listen":":5667"}' > "$CONFIG_FILE"
 [ ! -s "$META_FILE" ] && echo '{"accounts":[]}' > "$META_FILE"
 
-# 4. MENULIS SCRIPT MANAGER UTAMA
+# 4. Tulis Script Manager Utama
 cat <<EOF > "$MANAGER_SCRIPT"
 #!/bin/bash
 
-# --- IDENTITAS BOT ---
+# --- BOT DATA ---
 TG_BOT_TOKEN="$TG_BOT_TOKEN"
 TG_CHAT_ID="$TG_CHAT_ID"
 GITHUB_URL="$GITHUB_RAW_URL"
 
 CONFIG_FILE="$CONFIG_FILE"
 META_FILE="$META_FILE"
-SERVICE_NAME="$SERVICE_NAME"
+SERVICE_NAME="zivpn.service"
 MANAGER_SCRIPT="/usr/local/bin/zivpn-manager.sh"
 
-# --- FUNGSI ESTETIK STATUS ---
 system_status() {
     clear
     local OS_NAME=\$(grep -P '^PRETTY_NAME' /etc/os-release | cut -d'"' -f2)
@@ -98,7 +88,6 @@ system_status() {
     read -rp " Tekan [Enter] untuk kembali..."
 }
 
-# --- FUNGSI UPDATE SMART ---
 update_script() {
     echo -e "Checking for updates..."
     wget -q -O /tmp/zivpn-new.sh "\$GITHUB_URL"
@@ -107,7 +96,7 @@ update_script() {
         sed -i "s|TG_CHAT_ID=\".*\"|TG_CHAT_ID=\"\$TG_CHAT_ID\"|g" /tmp/zivpn-new.sh
         mv /tmp/zivpn-new.sh "\$MANAGER_SCRIPT"
         chmod +x "\$MANAGER_SCRIPT"
-        echo -e "✅ Update Berhasil! Silakan ketik 'menu' kembali."
+        echo -e "✅ Update Berhasil! Ketik 'menu' lagi."
         exit 0
     else
         echo -e "❌ Gagal update."; sleep 2
@@ -147,53 +136,47 @@ auto_remove_expired() {
     [ "\$changed" = true ] && systemctl restart "\$SERVICE_NAME" >/dev/null 2>&1
 }
 
-# --- MENU UTAMA ---
-case "\$1" in
-    cron) sync_accounts; auto_remove_expired ;;
-    *)
-        while true; do
-            clear
-            sync_accounts; auto_remove_expired
-            VPS_IP=\$(curl -s ifconfig.me)
-            echo -e "\e[1;32m================================================\e[0m"
-            echo -e "\e[1;33m           ZIVPN UDP ACCOUNT MANAGER            \e[0m"
-            echo -e "\e[1;32m================================================\e[0m"
-            echo -e " IP VPS       : \${VPS_IP}"
-            echo -e "\e[1;32m================================================\e[0m"
-            echo -e " 1) Lihat Akun       5) Status System"
-            echo -e " 2) Tambah Akun      6) Backup Telegram"
-            echo -e " 3) Hapus Akun       7) Restore Akun (Coming Soon)"
-            echo -e " 4) Restart Layanan  8) \e[1;33mUpdate Script\e[0m"
-            echo -e " 0) Keluar"
-            echo -e "\e[1;32m================================================\e[0m"
-            read -rp " Pilih Menu: " choice
-            case \$choice in
-                1) clear; printf "%-18s %-12s\n" "USER" "EXP"; echo "------------------------------"; jq -r '.accounts[] | "\(.user) \(.expired)"' "\$META_FILE" | while read -r u e; do printf "%-18s %-12s\n" "\$u" "\$e"; done; read -rp "Enter..." ;;
-                2) read -rp "User: " n; read -rp "Hari: " d; exp=\$(date -d "+\$d days" +%Y-%m-%d); jq --arg u "\$n" '.auth.config += [\$u]' "\$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "\$CONFIG_FILE"; jq --arg u "\$n" --arg e "\$exp" '.accounts += [{"user":\$u,"expired":\$e}]' "\$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "\$META_FILE"; systemctl restart "\$SERVICE_NAME"; send_tg "✅ Akun Baru: \$n (Exp: \$exp)";;
-                3) read -rp "User: " d; jq --arg u "\$d" '.auth.config |= map(select(. != \$u))' "\$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "\$CONFIG_FILE"; jq --arg u "\$d" '.accounts |= map(select(.user != \$u))' "\$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "\$META_FILE"; systemctl restart "\$SERVICE_NAME"; echo "Dihapus."; sleep 1 ;;
-                4) systemctl restart "\$SERVICE_NAME"; echo "Restarted."; sleep 1 ;;
-                5) system_status ;;
-                6) cp "\$CONFIG_FILE" /tmp/c.json; curl -s -F chat_id="\$TG_CHAT_ID" -F document=@/tmp/c.json https://api.telegram.org/bot\$TG_BOT_TOKEN/sendDocument > /dev/null; echo "Sent!"; sleep 1 ;;
-                7) echo "Fitur Restore segera hadir..."; sleep 2 ;;
-                8) update_script ;;
-                0) exit 0 ;;
-                *) echo "Pilihan tidak valid."; sleep 1 ;;
-            esac
-        done
-        ;;
-esac
+while true; do
+    clear
+    sync_accounts
+    auto_remove_expired
+    VPS_IP=\$(curl -s ifconfig.me)
+    echo -e "\e[1;32m================================================\e[0m"
+    echo -e "\e[1;33m           ZIVPN UDP ACCOUNT MANAGER            \e[0m"
+    echo -e "\e[1;32m================================================\e[0m"
+    echo -e " IP VPS       : \${VPS_IP}"
+    echo -e "\e[1;32m================================================\e[0m"
+    echo -e " 1) Lihat Akun       5) Status System"
+    echo -e " 2) Tambah Akun      6) Backup Telegram"
+    echo -e " 3) Hapus Akun       7) Restore Akun"
+    echo -e " 4) Restart Service  8) \e[1;33mUpdate Script\e[0m"
+    echo -e " 0) Keluar"
+    echo -e "\e[1;32m================================================\e[0m"
+    read -rp " Pilih Menu: " choice
+
+    case \$choice in
+        1) clear; printf "%-18s %-12s\n" "USER" "EXP"; echo "------------------------------"; jq -r '.accounts[] | "\(.user) \(.expired)"' "\$META_FILE" | while read -r u e; do printf "%-18s %-12s\n" "\$u" "\$e"; done; read -rp "Enter..." ;;
+        2) read -rp "User: " n; read -rp "Hari: " d; exp=\$(date -d "+\$d days" +%Y-%m-%d); jq --arg u "\$n" '.auth.config += [\$u]' "\$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "\$CONFIG_FILE"; jq --arg u "\$n" --arg e "\$exp" '.accounts += [{"user":\$u,"expired":\$e}]' "\$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "\$META_FILE"; systemctl restart "\$SERVICE_NAME"; send_tg "✅ Baru: \$n (Exp: \$exp)" ;;
+        3) read -rp "User: " d; jq --arg u "\$d" '.auth.config |= map(select(. != \$u))' "\$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "\$CONFIG_FILE"; jq --arg u "\$d" '.accounts |= map(select(.user != \$u))' "\$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "\$META_FILE"; systemctl restart "\$SERVICE_NAME"; echo "Dihapus."; sleep 1 ;;
+        4) systemctl restart "\$SERVICE_NAME"; echo "Restarted."; sleep 1 ;;
+        5) system_status ;;
+        6) cp "\$CONFIG_FILE" /tmp/c.json; curl -s -F chat_id="\$TG_CHAT_ID" -F document=@/tmp/c.json https://api.telegram.org/bot\$TG_BOT_TOKEN/sendDocument > /dev/null; echo "Sent!"; sleep 1 ;;
+        7) echo "Coming soon..."; sleep 1 ;;
+        8) update_script ;;
+        0) exit 0 ;;
+        *) echo "Pilihan salah!"; sleep 1 ;;
+    esac
+done
 EOF
 
-# 5. Finalize
+# 5. Permission & Shortcut
 chmod +x "$MANAGER_SCRIPT"
 echo "sudo bash $MANAGER_SCRIPT" > "$SHORTCUT"
 chmod +x "$SHORTCUT"
 
-# 6. Setup Cron Job
+# 6. Cron
 (crontab -l 2>/dev/null | grep -v "$MANAGER_SCRIPT cron") | crontab -
 (crontab -l 2>/dev/null; echo "0 0 * * * $MANAGER_SCRIPT cron") | crontab -
 
 clear
-echo "=================================================="
-echo "      INSTALASI SELESAI"
-echo "=================================================="
+echo "✅ Instalasi Selesai! Ketik 'menu' untuk menjalankan."
