@@ -83,7 +83,7 @@ draw_header() {
     local BU=$(awk -v b="$TX" 'BEGIN {printf "%.2f MB", b/1024/1024}')
 
     echo -e "${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
-    echo -e "${C}┃${NC}      ${Y}ZIVPN HARMONY DASHBOARD V32${NC}     ${C}┃${NC}"
+    echo -e "${C}┃${NC}      ${Y}ZIVPN MANAGER${NC}               ${C}┃${NC}"
     echo -e "${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "IP Address" "$IP"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "OS System" "$OS"
@@ -167,5 +167,4 @@ echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT" && chmod +x "$SHO
 (crontab -l 2>/dev/null; echo "0 0 * * * /usr/local/bin/zivpn-manager.sh cron") | crontab -
 
 clear
-echo -e "${G}✅ V32 ULTIMATE DASHBOARD INSTALLED!${NC}"
-echo -e "Status CPU & RAM kini tampil real-time di Dashboard utama."
+echo -e "${G}ZIVPN MANAGER INSTALLED!${NC}"
