@@ -3,11 +3,11 @@
 # --- PRE-INSTALLATION ---
 apt-get update -qq && apt-get install iptables-persistent jq vnstat curl wget sudo -y -qq
 
-# Path Konfigurasi
+# Path Konfigurasi (Tetap)
 CONFIG_DIR="/etc/zivpn"
-CONFIG_FILE="$CONFIG_DIR/config.json"
-META_FILE="$CONFIG_DIR/accounts_meta.json"
-TG_CONF="$CONFIG_DIR/telegram.conf"
+CONFIG_FILE="/etc/zivpn/config.json"
+META_FILE="/etc/zivpn/accounts_meta.json"
+TG_CONF="/etc/zivpn/telegram.conf"
 MANAGER_SCRIPT="/usr/local/bin/zivpn-manager.sh"
 SHORTCUT="/usr/local/bin/menu"
 
@@ -23,39 +23,20 @@ cat <<EOF > "$MANAGER_SCRIPT"
 # Load Telegram Data
 [ -f "$TG_CONF" ] && source "$TG_CONF"
 
-# Variabel Statis
-GITHUB_URL="https://raw.githubusercontent.com/richnstore/udepe/main/manager.sh"
-CONFIG_FILE="$CONFIG_FILE"
-META_FILE="$META_FILE"
+# Path Konfigurasi (Redefine untuk Sub-shell)
+CONFIG_FILE="/etc/zivpn/config.json"
+META_FILE="/etc/zivpn/accounts_meta.json"
+TG_CONF="/etc/zivpn/telegram.conf"
+MANAGER_PATH="/usr/local/bin/zivpn-manager.sh"
 SERVICE_NAME="zivpn.service"
+GITHUB_URL="https://raw.githubusercontent.com/richnstore/udepe/main/manager.sh"
 
 # Warna
 C='\e[1;36m'; G='\e[1;32m'; Y='\e[1;33m'; R='\e[1;31m'; P='\e[1;35m'; B='\e[1;34m'; NC='\e[0m'
 
-# --- FUNGSI RESTORE ---
-restore_data() {
-    clear
-    echo -e "\${C}┏━━━━━━━━━━━━━━━━━\${Y} RESTORE DATA \${C}━━━━━━━━━━━━━━━━━┓\${NC}"
-    echo -e " 1. Letakkan file backup (config.json) di folder /root/"
-    echo -e " 2. Pastikan nama filenya adalah \${Y}config.json\${NC}"
-    echo -e " 3. Jalankan restore ini."
-    echo -e "\${C}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\${NC}"
-    echo -ne " Lanjutkan restore? (y/n): " && read confirm
-    if [[ "\$confirm" == "y" ]]; then
-        if [ -f "/root/config.json" ]; then
-            cp /root/config.json "\$CONFIG_FILE"
-            systemctl restart "\$SERVICE_NAME" 2>/dev/null
-            echo -e "\${G}✅ Restore Berhasil! Akun telah dipulihkan.\${NC}"
-        else
-            echo -e "\${R}❌ File /root/config.json tidak ditemukan!\${NC}"
-        fi
-    fi
-    sleep 2
-}
-
-# --- FUNGSI CORE ---
+# --- FUNGSI HELPER ---
 send_tg() {
-    if [ ! -z "\$TG_BOT_TOKEN" ] && [ ! -z "\$TG_CHAT_ID" ]; then
+    if [ ! -z "\$TG_BOT_TOKEN" ]; then
         curl -s -X POST "https://api.telegram.org/bot\$TG_BOT_TOKEN/sendMessage" \
         -d chat_id="\$TG_CHAT_ID" -d parse_mode="HTML" --data-urlencode text="\$1" >/dev/null
     fi
@@ -90,16 +71,6 @@ auto_remove_expired() {
     [ "\$changed" = true ] && systemctl restart "\$SERVICE_NAME" >/dev/null 2>&1
 }
 
-# --- FUNGSI INTERFACE ---
-convert_bw() {
-    local bytes=\$1
-    if [ "\$bytes" -gt 1073741824 ]; then
-        awk -v b="\$bytes" 'BEGIN {printf "%.2f GiB", b/1024/1024/1024}'
-    else
-        awk -v b="\$bytes" 'BEGIN {printf "%.2f MiB", b/1024/1024}'
-    fi
-}
-
 draw_header() {
     clear
     VPS_IP=\$(curl -s ifconfig.me)
@@ -109,14 +80,18 @@ draw_header() {
     BW_D_RAW=\$(echo "\$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == \$T_Y and .date.month == \$T_M and .date.day == \$T_D) | .rx // 0" 2>/dev/null)
     BW_U_RAW=\$(echo "\$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == \$T_Y and .date.month == \$T_M and .date.day == \$T_D) | .tx // 0" 2>/dev/null)
     
+    # Konversi BW Sederhana
+    BW_D=\$(awk -v b="\$BW_D_RAW" 'BEGIN {printf "%.2f MB", b/1024/1024}')
+    BW_U=\$(awk -v b="\$BW_U_RAW" 'BEGIN {printf "%.2f MB", b/1024/1024}')
+
     echo -e "\${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\${NC}"
-    echo -e "\${C}┃\${NC} \${P}⚡\${NC} \${Y}ZIVPN FULL PANEL\${NC}      \${C}┃\${NC} \${B}IP:\${NC} \${G}\$VPS_IP\${NC}"
+    echo -e "\${C}┃\${NC} \${P}⚡\${NC} \${Y}ZIVPN PRO PANEL V15\${NC}    \${C}┃\${NC} \${B}IP:\${NC} \${G}\$VPS_IP\${NC}"
     echo -e "\${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\${NC}"
-    echo -e "\${C}┃\${NC} \${B}Traffic Hari Ini:\${NC} \${G}↓\$(convert_bw "\${BW_D_RAW:-0}")\${NC} | \${R}↑\$(convert_bw "\${BW_U_RAW:-0}")\${NC}"
+    echo -e "\${C}┃\${NC} \${B}Traffic Hari Ini:\${NC} \${G}↓\$BW_D\${NC} | \${R}↑\$BW_U\${NC}"
     echo -e "\${C}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\${NC}"
 }
 
-# --- LOOP MENU ---
+# --- MENU ---
 case "\$1" in
     cron) sync_accounts; auto_remove_expired ;;
     *)
@@ -128,7 +103,7 @@ case "\$1" in
         echo -e "  \${C}[\${Y}04\${C}]\${NC} Restart Service       \${C}[\${Y}09\${C}]\${NC} Update Script"
         echo -e "  \${C}[\${Y}05\${C}]\${NC} Status System         \${C}[\${Y}00\${C}]\${NC} Keluar"
         echo -e "\${C}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
-        echo -ne "  \${B}Pilih menu\${NC} [01-09]: " && read choice
+        echo -ne "  \${B}Pilih menu\${NC}: " && read choice
 
         case \$choice in
             1|01) read -rp "  User: " n; read -rp "  Hari: " d; exp=\$(date -d "+\$d days" +%Y-%m-%d); jq --arg u "\$n" '.auth.config += [\$u]' "\$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "\$CONFIG_FILE"; jq --arg u "\$n" --arg e "\$exp" '.accounts += [{"user":\$u,"expired":\$e}]' "\$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "\$META_FILE"; systemctl restart "\$SERVICE_NAME" 2>/dev/null; send_tg "✅ Baru: \$n (Exp: \$exp)"; echo -e "\${G}Berhasil!\${NC}"; sleep 1 ;;
@@ -136,10 +111,10 @@ case "\$1" in
             3|03) clear; printf "\${Y}%-18s %-12s\${NC}\n" "USER" "EXPIRED"; echo "------------------------------"; jq -r '.accounts[] | "\(.user) \(.expired)"' "\$META_FILE" | while read -r u e; do printf "%-18s %-12s\n" "\$u" "\$e"; done; read -rp "Enter..." ;;
             4|04) systemctl restart "\$SERVICE_NAME" 2>/dev/null; echo "Restarted."; sleep 1 ;;
             5|05) clear; uptime; free -h; df -h /; read -rp "Enter..." ;;
-            6|06) if [ -z "\$TG_BOT_TOKEN" ]; then echo -e "\${R}Setup Telegram dulu (Menu 08)!\${NC}"; sleep 2; else cp "\$CONFIG_FILE" /tmp/c.json; curl -s -F chat_id="\$TG_CHAT_ID" -F document=@/tmp/c.json https://api.telegram.org/bot\$TG_BOT_TOKEN/sendDocument > /dev/null; echo "Sent!"; sleep 1; fi ;;
-            7|07) restore_data ;;
-            8|08) clear; echo -ne "Token: " && read NT; echo -ne "ID: " && read NI; echo "TG_BOT_TOKEN=\"\$NT\"" > "$TG_CONF"; echo "TG_CHAT_ID=\"\$NI\"" >> "$TG_CONF"; source "$TG_CONF"; echo "Saved!"; sleep 1 ;;
-            9|09) wget -q -O /tmp/z.sh "\$GITHUB_URL" && mv /tmp/z.sh "\$MANAGER_SCRIPT" && chmod +x "\$MANAGER_SCRIPT" && echo "Updated!"; exit 0 ;;
+            6|06) if [ -z "\$TG_BOT_TOKEN" ]; then echo "Setup Telegram Dulu!"; sleep 2; else cp "\$CONFIG_FILE" /tmp/c.json; curl -s -F chat_id="\$TG_CHAT_ID" -F document=@/tmp/c.json https://api.telegram.org/bot\$TG_BOT_TOKEN/sendDocument > /dev/null; echo "Sent!"; sleep 1; fi ;;
+            7|07) [ -f "/root/config.json" ] && cp /root/config.json "\$CONFIG_FILE" && echo "Restored!" || echo "File not found!"; sleep 2 ;;
+            8|08) clear; echo -ne "Token: " && read NT; echo -ne "ID: " && read NI; echo "TG_BOT_TOKEN=\"\$NT\"" > "\$TG_CONF"; echo "TG_CHAT_ID=\"\$NI\"" >> "\$TG_CONF"; source "\$TG_CONF"; echo "Saved!"; sleep 1 ;;
+            9|09) echo "Updating..."; wget -q -O /tmp/z.sh "\$GITHUB_URL" && mv /tmp/z.sh "/usr/local/bin/zivpn-manager.sh" && chmod +x "/usr/local/bin/zivpn-manager.sh" && echo "Success!"; sleep 1; exit 0 ;;
             0|00) exit 0 ;;
         esac
     done
@@ -149,11 +124,13 @@ EOF
 
 # --- FINALISASI ---
 chmod +x "$MANAGER_SCRIPT"
-echo "sudo bash $MANAGER_SCRIPT" > "$SHORTCUT"
+echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT"
 chmod +x "$SHORTCUT"
-(crontab -l 2>/dev/null | grep -v "$MANAGER_SCRIPT cron") | crontab -
-(crontab -l 2>/dev/null; echo "0 0 * * * $MANAGER_SCRIPT cron") | crontab -
+
+# Cron Job
+(crontab -l 2>/dev/null | grep -v "zivpn-manager.sh cron") | crontab -
+(crontab -l 2>/dev/null; echo "0 0 * * * /usr/local/bin/zivpn-manager.sh cron") | crontab -
 
 clear
-echo -e "${GREEN}✅ ZIVPN MANAGER V14 INSTALLED!${NC}"
-echo -e "Ketik ${YELLOW}'menu'${NC} untuk melihat fitur lengkap."
+echo -e "${GREEN}✅ BUG FIX V15 SELESAI!${NC}"
+echo -e "Ketik ${YELLOW}'menu'${NC} untuk memulai."
