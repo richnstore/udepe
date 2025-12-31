@@ -1,13 +1,13 @@
 #!/bin/bash
 
 clear
-echo "=========================================="
-echo "      ZIVPN MANAGER INSTALLER    "
-echo "    BY RICH NARENDRA X GEMINI AI    "
-echo "=========================================="
+echo "=================================================="
+echo "          ZIVPN MANAGER INSTALLER"
+echo "       BY RICH NARENDRA X GEMINI AI"
+echo "=================================================="
 echo ""
 
-# URL GitHub kamu untuk Update
+# URL GitHub untuk Fitur Update (Ganti dengan link Anda jika sudah di-upload)
 GITHUB_RAW_URL="https://raw.githubusercontent.com/richnstore/udepe/main/manager.sh"
 
 # Input Telegram (Looping jika kosong)
@@ -24,21 +24,38 @@ while true; do
 done
 
 echo ""
-echo "[-] Mengonfigurasi Sistem & Kernel..."
+echo "[-] Memulai Optimasi Sistem & Jaringan..."
 
-# --- TAMBAHAN: IP FORWARD & IPTABLES PERSISTENT ---
-# Install tool penyimpan iptables
-sudo apt-get update
-sudo apt-get install iptables-persistent -y
+# 1. Install Tool Pendukung
+apt-get update
+apt-get install iptables-persistent jq vnstat curl wget sudo -y
 
-# Aktifkan IP Forwarding secara permanen
-if ! grep -q "net.ipv4.ip_forward = 1" /etc/sysctl.conf; then
-    echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf
-fi
-sudo sysctl -p
+# 2. Aktifkan IP Forwarding & UDP Buffer Tuning (Ultra Speed)
+echo "[-] Menyetel Parameter Kernel..."
+sed -i '/net.ipv4.ip_forward/d' /etc/sysctl.conf
+sed -i '/net.core.rmem_max/d' /etc/sysctl.conf
+sed -i '/net.core.wmem_max/d' /etc/sysctl.conf
+sed -i '/net.core.rmem_default/d' /etc/sysctl.conf
+sed -i '/net.core.wmem_default/d' /etc/sysctl.conf
+sed -i '/net.ipv4.udp_rmem_min/d' /etc/sysctl.conf
+sed -i '/net.ipv4.udp_wmem_min/d' /etc/sysctl.conf
 
-# Simpan aturan yang saat ini aktif ke dalam file konfigurasi
-sudo netfilter-persistent save
+cat <<EOF >> /etc/sysctl.conf
+net.ipv4.ip_forward = 1
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.core.rmem_default = 16777216
+net.core.wmem_default = 16777216
+net.ipv4.udp_rmem_min = 16384
+net.ipv4.udp_wmem_min = 16384
+net.ipv4.tcp_fastopen = 3
+EOF
+
+# Terapkan sysctl
+sysctl -p
+
+# 3. Simpan Iptables agar Permanen
+netfilter-persistent save
 
 # --- KONFIGURASI PATH ---
 CONFIG_FILE="/etc/zivpn/config.json"
@@ -48,13 +65,13 @@ MANAGER_SCRIPT="/usr/local/bin/zivpn-manager.sh"
 SHORTCUT="/usr/local/bin/menu"
 LOG_FILE="/var/log/zivpn-expired.log"
 
-# 1. Inisialisasi Database
+# 4. Inisialisasi Database
 mkdir -p /etc/zivpn
 [ ! -s "$CONFIG_FILE" ] && echo '{"auth":{"config":[]}, "listen":":5667"}' > "$CONFIG_FILE"
 [ ! -s "$META_FILE" ] && echo '{"accounts":[]}' > "$META_FILE"
 touch "$LOG_FILE"
 
-# 2. Menulis Script Manager
+# 5. Menulis Script Manager Utama
 cat <<EOF > "$MANAGER_SCRIPT"
 #!/bin/bash
 
@@ -118,7 +135,7 @@ restore_accounts() {
     clear
     echo "=== RESTORE AKUN ZIVPN ==="
     echo "1) Restore dari Backup Lokal"
-    echo "2) Restore via Telegram"
+    echo "2) Restore via Telegram (Forward file ke bot dulu)"
     echo "0) Kembali"
     read -rp " Pilih: " rest_opt
     case \$rest_opt in
@@ -141,20 +158,24 @@ restore_accounts() {
                 [[ "\$FILE_NAME" == *"meta.json"* ]] && cp "/tmp/\$FILE_NAME" "\$META_FILE"
                 systemctl restart "\$SERVICE_NAME"
                 echo "✅ Restore \$FILE_NAME Berhasil!"; sleep 2
+            else
+                echo "❌ File tidak ditemukan di Bot."; sleep 2
             fi ;;
     esac
 }
 
 update_script() {
-    echo "Checking updates..."
+    echo "Memeriksa versi terbaru di GitHub..."
     wget -q -O /tmp/zivpn-new.sh "\$GITHUB_URL"
     if [ \$? -eq 0 ]; then
         sed -i "s|TG_BOT_TOKEN=.*|TG_BOT_TOKEN=\"\$TG_BOT_TOKEN\"|g" /tmp/zivpn-new.sh
         sed -i "s|TG_CHAT_ID=.*|TG_CHAT_ID=\"\$TG_CHAT_ID\"|g" /tmp/zivpn-new.sh
         mv /tmp/zivpn-new.sh "$MANAGER_SCRIPT"
         chmod +x "$MANAGER_SCRIPT"
-        echo "✅ Update Success!"; sleep 1
+        echo "✅ Update Berhasil!"; sleep 1
         exit 0
+    else
+        echo "❌ Gagal Update."; sleep 2
     fi
 }
 
@@ -216,14 +237,16 @@ case "\$1" in
 esac
 EOF
 
-# 3. Finalize
+# 6. Shortcut & Permission
 chmod +x "$MANAGER_SCRIPT"
 echo "sudo bash $MANAGER_SCRIPT" > "$SHORTCUT"
 chmod +x "$SHORTCUT"
 
-# 4. Cron Job
+# 7. Cron Job 00:00
 (crontab -l 2>/dev/null | grep -v "$MANAGER_SCRIPT cron") | crontab -
 (crontab -l 2>/dev/null; echo "0 0 * * * $MANAGER_SCRIPT cron") | crontab -
 
 clear
-echo "✅ Instalasi Berhasil! Ketik 'menu' sekarang."
+echo "=================================================="
+echo "      INSTALASI SELESAI    "
+echo "=================================================="
