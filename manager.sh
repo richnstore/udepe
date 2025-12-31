@@ -29,7 +29,16 @@ TG_BOT_TOKEN="6506568094:AAFXpDoZs3lb0tqGGToUMI7pyYQ-_vSY5F8"
 TG_CHAT_ID="6132013792"
 LOG_FILE="/var/log/zivpn-expired.log"
 
-# --- FUNGSI HELPER ---
+# --- FUNGSI HELPER & KALIBRASI BW ---
+convert_bw() {
+    local bytes=$1
+    if [ "$bytes" -gt 1073741824 ]; then
+        awk -v b="$bytes" 'BEGIN {printf "%.2f GiB", b/1024/1024/1024}'
+    else
+        awk -v b="$bytes" 'BEGIN {printf "%.2f MiB", b/1024/1024}'
+    fi
+}
+
 send_tg() {
     local MSG=$1
     curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
@@ -66,54 +75,35 @@ auto_remove_expired() {
     [ "$changed" = true ] && systemctl restart "$SERVICE_NAME" >/dev/null 2>&1
 }
 
-# --- FUNGSI MENU ---
-list_accounts() {
+restore_accounts() {
     clear
-    echo "=== DAFTAR AKUN ZIVPN ==="
-    local today=$(date +%s)
-    printf "%-18s %-12s %-10s\n" "USER/PASS" "EXP" "STATUS"
-    echo "----------------------------------------------"
-    jq -r '.accounts[] | "\(.user) \(.expired)"' "$META_FILE" 2>/dev/null | while read -r u e; do
-        local exp_ts=$(date -d "$e" +%s 2>/dev/null)
-        local status="Aktif"
-        [ "$today" -ge "$exp_ts" ] && status="Expired"
-        printf "%-18s %-12s %-10s\n" "$u" "$e" "$status"
-    done
-    read -rp "Enter..." enter
-}
-
-add_account() {
-    read -rp "Password Baru: " new_pass
-    [ -z "$new_pass" ] && return
-    read -rp "Masa Aktif (Hari): " days
-    [[ ! "$days" =~ ^[0-9]+$ ]] && days=30
-    local exp_date=$(date -d "+$days days" +%Y-%m-%d)
-    jq --arg u "$new_pass" '.auth.config += [$u]' "$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "$CONFIG_FILE"
-    jq --arg u "$new_pass" --arg e "$exp_date" '.accounts += [{"user":$u,"expired":$e}]' "$META_FILE" > /tmp/meta.tmp && mv /tmp/meta.tmp "$META_FILE"
-    systemctl restart "$SERVICE_NAME"
-    send_tg "<b>✅ AKUN BARU DIBUAT</b>%0A━━━━━━━━━━━━━━%0A<b>User:</b> <code>$new_pass</code>%0A<b>Exp:</b> <code>$exp_date</code>%0A━━━━━━━━━━━━━━"
-    echo "Sukses."
-    sleep 1
-}
-
-delete_account() {
-    read -rp "Password yang akan dihapus: " del_pass
-    jq --arg u "$del_pass" '.auth.config |= map(select(. != $u))' "$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "$CONFIG_FILE"
-    jq --arg u "$del_pass" '.accounts |= map(select(.user != $u))' "$META_FILE" > /tmp/meta.tmp && mv /tmp/meta.tmp "$META_FILE"
-    systemctl restart "$SERVICE_NAME"
-    echo "Terhapus."
-    sleep 1
-}
-
-vps_status() {
-    clear
-    echo "=== STATUS VPS ==="
-    echo "Uptime     : $(uptime -p)"
-    echo "CPU Usage  : $(top -bn1 | grep Cpu | awk '{print $2 + $4 "%"}')"
-    echo "RAM Usage  : $(free -h | awk '/Mem:/ {print $3 " / " $2}')"
-    echo "Disk Usage : $(df -h / | awk 'NR==2 {print $3 " / " $2 " (" $5 ")"}')"
-    echo "=================="
-    read -rp "Enter..." enter
+    echo "=== RESTORE AKUN ZIVPN ==="
+    echo "1) Restore dari Backup Lokal"
+    echo "2) Restore via Telegram (Auto)"
+    echo "0) Kembali"
+    read -rp "Pilih: " rest_opt
+    case $rest_opt in
+        1)
+            if [ -f "/etc/zivpn/backup_config.json" ]; then
+                cp /etc/zivpn/backup_config.json "$CONFIG_FILE"
+                cp /etc/zivpn/backup_meta.json "$META_FILE"
+                systemctl restart "$SERVICE_NAME"
+                echo "✅ Restore Berhasil!"; sleep 2
+            fi ;;
+        2)
+            echo "Mencari file di Telegram..."
+            FILE_DATA=$(curl -s "https://api.telegram.org/bot$TG_BOT_TOKEN/getUpdates" | jq -r '.result | map(select(.message.document != null)) | last')
+            FILE_ID=$(echo "$FILE_DATA" | jq -r '.message.document.file_id // empty')
+            FILE_NAME=$(echo "$FILE_DATA" | jq -r '.message.document.file_name // empty')
+            if [ ! -z "$FILE_ID" ]; then
+                FILE_PATH=$(curl -s "https://api.telegram.org/bot$TG_BOT_TOKEN/getFile?file_id=$FILE_ID" | jq -r '.result.file_path')
+                curl -s -o "/tmp/$FILE_NAME" "https://api.telegram.org/file/bot$TG_BOT_TOKEN/$FILE_PATH"
+                [[ "$FILE_NAME" == *"config.json"* ]] && mv "/tmp/$FILE_NAME" "$CONFIG_FILE"
+                [[ "$FILE_NAME" == *"meta.json"* ]] && mv "/tmp/$FILE_NAME" "$META_FILE"
+                systemctl restart "$SERVICE_NAME"
+                echo "✅ Restore $FILE_NAME Berhasil!"; sleep 2
+            fi ;;
+    esac
 }
 
 # --- MENU UTAMA ---
@@ -128,46 +118,46 @@ case "$1" in
             sync_accounts
             auto_remove_expired
             
-            # Statistik Header
+            # Statistik Header (Kalibrasi Presisi)
             VPS_IP=$(curl -s ifconfig.me || echo "Error")
             ISP_NAME=$(curl -s https://ipinfo.io/org | cut -d' ' -f2- || echo "Error")
-            NET_IFACE=$(ip route | awk '/default/ {print $5}' | head -n1)
+            NET_IFACE=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
             
-            # Bandwidth (Membutuhkan vnstat)
-            BW_D_RAW=$(vnstat -i "$NET_IFACE" --json 2>/dev/null | jq -r '.interfaces[0].traffic.day[-1].rx' 2>/dev/null || echo "0")
-            BW_U_RAW=$(vnstat -i "$NET_IFACE" --json 2>/dev/null | jq -r '.interfaces[0].traffic.day[-1].tx' 2>/dev/null || echo "0")
-            BW_D=$(awk -v b=$BW_D_RAW 'BEGIN {printf "%.2f MB", b/1024/1024}')
-            BW_U=$(awk -v b=$BW_U_RAW 'BEGIN {printf "%.2f MB", b/1024/1024}')
+            # Ambil Bandwidth Hari Ini
+            BW_JSON=$(vnstat -i "$NET_IFACE" --json 2>/dev/null)
+            T_Y=$(date +%Y); T_M=$(date +%-m); T_D=$(date +%-d)
+            BW_D_RAW=$(echo "$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == $T_Y and .date.month == $T_M and .date.day == $T_D) | .rx // 0" 2>/dev/null)
+            BW_U_RAW=$(echo "$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == $T_Y and .date.month == $T_M and .date.day == $T_D) | .tx // 0" 2>/dev/null)
+            
+            BW_D=$(convert_bw "${BW_D_RAW:-0}")
+            BW_U=$(convert_bw "${BW_U_RAW:-0}")
 
-            echo "===================================="
-            echo "     ZIVPN UDP ACCOUNT MANAGER"
-            echo "===================================="
+            echo "================================================"
+            echo "           ZIVPN UDP ACCOUNT MANAGER"
+            echo "================================================"
             echo " IP VPS       : ${VPS_IP}"
             echo " ISP          : ${ISP_NAME}"
-            echo " Daily BW     : D $BW_D | U $BW_U"
-            echo "===================================="
+            echo " Hari Ini     : ↓ $BW_D | ↑ $BW_U"
+            echo "================================================"
             echo " 1) Lihat Semua Akun"
             echo " 2) Tambah Akun Baru"
             echo " 3) Hapus Akun"
             echo " 4) Restart Layanan"
             echo " 5) Status System VPS"
-            echo " 6) Backup & Kirim Telegram"
+            echo " 6) Backup Ke Telegram"
+            echo " 7) Restore Akun (Lokal/Telegram)"
             echo " 0) Keluar"
-            echo "===================================="
+            echo "================================================"
             read -rp " Pilih Menu: " choice
 
             case $choice in
-                1) list_accounts ;;
-                2) add_account ;;
-                3) delete_account ;;
+                1) clear; printf "%-18s %-12s %-10s\n" "USER" "EXP" "STATUS"; echo "------------------------------------"; jq -r '.accounts[] | "\(.user) \(.expired)"' "$META_FILE" | while read -r u e; do t=$(date +%s); x=$(date -d "$e" +%s); s="Aktif"; [ "$t" -ge "$x" ] && s="Expired"; printf "%-18s %-12s %-10s\n" "$u" "$e" "$s"; done; read -rp "Enter..." ;;
+                2) read -rp "User: " n; read -rp "Hari: " d; [[ ! "$d" =~ ^[0-9]+$ ]] && d=30; exp=$(date -d "+$d days" +%Y-%m-%d); jq --arg u "$n" '.auth.config += [$u]' "$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "$CONFIG_FILE"; jq --arg u "$n" --arg e "$exp" '.accounts += [{"user":$u,"expired":$e}]' "$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "$META_FILE"; systemctl restart "$SERVICE_NAME"; send_tg "✅ <b>AKUN BARU</b>%0AUser: <code>$n</code>%0AExp: <code>$exp</code>";;
+                3) read -rp "User: " d; jq --arg u "$d" '.auth.config |= map(select(. != $u))' "$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "$CONFIG_FILE"; jq --arg u "$d" '.accounts |= map(select(.user != $u))' "$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "$META_FILE"; systemctl restart "$SERVICE_NAME"; echo "Dihapus."; sleep 1 ;;
                 4) systemctl restart "$SERVICE_NAME"; echo "Restarted."; sleep 1 ;;
-                5) vps_status ;;
-                6) 
-                   cp "$CONFIG_FILE" /tmp/backup_config.json
-                   cp "$META_FILE" /tmp/backup_meta.json
-                   curl -s -F chat_id="$TG_CHAT_ID" -F document=@/tmp/backup_config.json https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument > /dev/null
-                   curl -s -F chat_id="$TG_CHAT_ID" -F document=@/tmp/backup_meta.json https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument > /dev/null
-                   echo "Backup terkirim ke Telegram."; sleep 2 ;;
+                5) clear; echo "=== SYSTEM STATUS ==="; uptime; free -h; df -h /; echo "====================="; read -rp "Enter..." ;;
+                6) cp "$CONFIG_FILE" /etc/zivpn/backup_config.json; cp "$META_FILE" /etc/zivpn/backup_meta.json; curl -s -F chat_id="$TG_CHAT_ID" -F document=@/etc/zivpn/backup_config.json https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument > /dev/null; curl -s -F chat_id="$TG_CHAT_ID" -F document=@/etc/zivpn/backup_meta.json https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument > /dev/null; echo "Backup terkirim!"; sleep 1 ;;
+                7) restore_accounts ;;
                 0) exit 0 ;;
             esac
         done
@@ -175,9 +165,8 @@ case "$1" in
 esac
 EOF
 
-# 3. Create Shortcut & Permission
+# 3. Shortcut & Permission
 chmod +x "$MANAGER_SCRIPT"
-rm -f /usr/local/bin/zivpn
 cat <<EOF > "$SHORTCUT"
 #!/bin/bash
 sudo bash $MANAGER_SCRIPT
@@ -190,8 +179,5 @@ chmod +x "$SHORTCUT"
 
 clear
 echo "=========================================="
-echo "   ZIVPN MANAGER BERHASIL DIINSTAL  "
-echo "=========================================="
-echo " Ketik 'menu' untuk membuka manager."
-echo " Auto Expired aktif setiap jam 00:00."
+echo "      ZIVPN MANAGER INSTALLED"
 echo "=========================================="
