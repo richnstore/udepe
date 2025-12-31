@@ -33,33 +33,49 @@ GITHUB_URL="https://raw.githubusercontent.com/richnstore/udepe/main/manager.sh"
 # Warna Harmony V17
 C='\e[1;36m'; G='\e[1;32m'; Y='\e[1;33m'; R='\e[1;31m'; B='\e[1;34m'; NC='\e[0m'
 
-# --- FUNGSI RESTORE TELEGRAM ---
-restore_telegram() {
+# --- FUNGSI HAPUS AKUN (DENGAN NOMOR) ---
+delete_account() {
     clear
-    echo -e "\${C}┏━━━━━━━━━━━━━\${Y} RESTORE VIA TELEGRAM \${C}━━━━━━━━━━━━┓\${NC}"
-    if [ -z "\$TG_BOT_TOKEN" ]; then
-        echo -e "  \${R}❌ Error: Setup Telegram dulu di menu 08!\${NC}"
+    echo -e "\${C}┏━━━━━━━━━━━━━━\${Y} HAPUS AKUN ZIVPN \${C}━━━━━━━━━━━━━━┓\${NC}"
+    
+    # Ambil daftar user
+    mapfile -t USER_LIST < <(jq -r '.auth.config[]' "\$CONFIG_FILE")
+    
+    if [ \${#USER_LIST[@]} -eq 0 ]; then
+        printf " \${C}┃\${NC} \${R}%-40s\${NC} \${C}┃\${NC}\n" "Tidak ada akun yang terdaftar."
+        echo -e "\${C}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\${NC}"
         sleep 2; return
     fi
-    echo -e "  \${Y}[-]\${NC} Mencari file backup di Bot Anda..."
-    FILE_DATA=\$(curl -s "https://api.telegram.org/bot\$TG_BOT_TOKEN/getUpdates")
-    FILE_ID=\$(echo "\$FILE_DATA" | jq -r '.result | reverse | .[] | select(.message.document.file_name=="config.json") | .message.document.file_id' | head -n 1)
-    if [ -z "\$FILE_ID" ] || [ "\$FILE_ID" == "null" ]; then
-        echo -e "  \${R}❌ Tidak ditemukan file 'config.json'.\${NC}"
-        sleep 3; return
+
+    # Tampilkan daftar dengan nomor
+    index=1
+    for user in "\${USER_LIST[@]}"; do
+        printf " \${C}┃\${NC}  \${Y}[%02d]\${NC} %-34s \${C}┃\${NC}\n" "\$index" "\$user"
+        ((index++))
+    done
+    echo -e "\${C}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\${NC}"
+    
+    echo -ne "  \${B}Pilih Nomor User yang akan dihapus\${NC}: " && read user_idx
+    
+    # Validasi input nomor
+    if [[ ! "\$user_idx" =~ ^[0-9]+\$ ]] || [ "\$user_idx" -lt 1 ] || [ "\$user_idx" -ge "\$index" ]; then
+        echo -e "  \${R}❌ Nomor tidak valid!\${NC}"
+        sleep 1; return
     fi
-    FILE_PATH=\$(curl -s "https://api.telegram.org/bot\$TG_BOT_TOKEN/getFile?file_id=\$FILE_ID" | jq -r '.result.file_path')
-    wget -q -O "\$CONFIG_FILE" "https://api.telegram.org/file/bot\$TG_BOT_TOKEN/\$FILE_PATH"
-    if [ \$? -eq 0 ]; then
-        systemctl restart "\$SERVICE_NAME" 2>/dev/null
-        echo -e "  \${G}✅ Restore Berhasil!\${NC}"
-    else
-        echo -e "  \${R}❌ Gagal download.\${NC}"
-    fi
+
+    # Ambil nama user berdasarkan index (array mulai dari 0)
+    target_user=\${USER_LIST[\$((user_idx-1))]}
+
+    # Proses Hapus
+    jq --arg u "\$target_user" '.auth.config |= map(select(. != \$u))' "\$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "\$CONFIG_FILE"
+    jq --arg u "\$target_user" '.accounts |= map(select(.user != \$u))' "\$META_FILE" > /tmp/meta.tmp && mv /tmp/meta.tmp "\$META_FILE"
+    
+    systemctl restart "\$SERVICE_NAME" 2>/dev/null
+    echo -e "  \${G}✅ Akun [\$target_user] Berhasil Dihapus!\${NC}"
     sleep 2
 }
 
-# --- FUNGSI STATUS SYSTEM (FIXED) ---
+# --- FUNGSI STATUS SYSTEM ---
 show_system_status() {
     clear
     local UPTIME=\$(uptime -p | sed 's/up //')
@@ -79,35 +95,6 @@ show_system_status() {
 }
 
 # --- FUNGSI CORE ---
-sync_accounts() {
-    local all_pass=\$(jq -r '.auth.config[]' "\$CONFIG_FILE" 2>/dev/null)
-    for pass in \$all_pass; do
-        [ -z "\$pass" ] || [ "\$pass" == "null" ] && continue
-        local exists=\$(jq -r --arg u "\$pass" '.accounts[] | select(.user==\$u) | .user' "\$META_FILE" 2>/dev/null)
-        if [ -z "\$exists" ]; then
-            jq --arg u "\$pass" --arg e "2099-12-31" '.accounts += [{"user":\$u,"expired":\$e}]' "\$META_FILE" > /tmp/meta.tmp && mv /tmp/meta.tmp "\$META_FILE"
-        fi
-    done
-}
-
-auto_remove_expired() {
-    local today=\$(date +%s)
-    local changed=false
-    while read -r acc; do
-        [ -z "\$acc" ] && continue
-        local user=\$(echo "\$acc" | jq -r '.user')
-        local exp=\$(echo "\$acc" | jq -r '.expired')
-        local exp_ts=\$(date -d "\$exp" +%s 2>/dev/null)
-        if [ \$? -eq 0 ] && [ "\$today" -ge "\$exp_ts" ]; then
-            jq --arg u "\$user" '.auth.config |= map(select(. != \$u))' "\$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "\$CONFIG_FILE"
-            jq --arg u "\$user" '.accounts |= map(select(.user != \$u))' "\$META_FILE" > /tmp/meta.tmp && mv /tmp/meta.tmp "\$META_FILE"
-            [ ! -z "\$TG_BOT_TOKEN" ] && curl -s -X POST "https://api.telegram.org/bot\$TG_BOT_TOKEN/sendMessage" -d chat_id="\$TG_CHAT_ID" -d text="Akun \$user Expired & Dihapus." >/dev/null
-            changed=true
-        fi
-    done < <(jq -c '.accounts[]' "\$META_FILE" 2>/dev/null)
-    [ "\$changed" = true ] && systemctl restart "\$SERVICE_NAME" >/dev/null 2>&1
-}
-
 draw_header() {
     clear
     VPS_IP=\$(curl -s ifconfig.me)
@@ -120,50 +107,43 @@ draw_header() {
     BW_U=\$(awk -v b="\$BW_U_RAW" 'BEGIN {printf "%.2f MB", b/1024/1024}')
 
     echo -e "\${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\${NC}"
-    echo -e "\${C}┃\${NC}      \${Y}ZIVPN HARMONY PANEL V20\${NC}       \${C}┃\${NC} \${B}IP:\${NC} \${G}\$VPS_IP\${NC}"
+    echo -e "\${C}┃\${NC}      \${Y}ZIVPN HARMONY PANEL V21\${NC}       \${C}┃\${NC} \${B}IP:\${NC} \${G}\$VPS_IP\${NC}"
     echo -e "\${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\${NC}"
     echo -e "\${C}┃\${NC} \${B}Traffic Hari Ini:\${NC} \${G}↓\$BW_D\${NC} | \${R}↑\$BW_U\${NC}"
     echo -e "\${C}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\${NC}"
 }
 
 # --- LOOP MENU ---
-case "\$1" in
-    cron) sync_accounts; auto_remove_expired ;;
-    *)
-    while true; do
-        sync_accounts; auto_remove_expired; draw_header
-        echo -e "  \${C}[\${Y}01\${C}]\${NC} Tambah Akun           \${C}[\${Y}06\${C}]\${NC} Backup Telegram"
-        echo -e "  \${C}[\${Y}02\${C}]\${NC} Hapus Akun            \${C}[\${Y}07\${C}]\${NC} Restore Telegram"
-        echo -e "  \${C}[\${Y}03\${C}]\${NC} Lihat Daftar Akun     \${C}[\${Y}08\${C}]\${NC} Settings Telegram"
-        echo -e "  \${C}[\${Y}04\${C}]\${NC} Restart Service       \${C}[\${Y}09\${C}]\${NC} Update Script"
-        echo -e "  \${C}[\${Y}05\${C}]\${NC} Status System         \${C}[\${Y}00\${C}]\${NC} Keluar"
-        echo -e "\${C}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
-        echo -ne "  \${B}Pilih menu\${NC}: " && read choice
+while true; do
+    draw_header
+    echo -e "  \${C}[\${Y}01\${C}]\${NC} Tambah Akun           \${C}[\${Y}06\${C}]\${NC} Backup Telegram"
+    echo -e "  \${C}[\${Y}02\${C}]\${NC} Hapus Akun            \${C}[\${Y}07\${C}]\${NC} Restore Telegram"
+    echo -e "  \${C}[\${Y}03\${C}]\${NC} Lihat Daftar Akun     \${C}[\${Y}08\${C}]\${NC} Settings Telegram"
+    echo -e "  \${C}[\${Y}04\${C}]\${NC} Restart Service       \${C}[\${Y}09\${C}]\${NC} Update Script"
+    echo -e "  \${C}[\${Y}05\${C}]\${NC} Status System         \${C}[\${Y}00\${C}]\${NC} Keluar"
+    echo -e "\${C}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
+    echo -ne "  \${B}Pilih menu\${NC}: " && read choice
 
-        case \$choice in
-            1|01) read -rp "  User: " n; read -rp "  Hari: " d; exp=\$(date -d "+\$d days" +%Y-%m-%d); jq --arg u "\$n" '.auth.config += [\$u]' "\$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "\$CONFIG_FILE"; jq --arg u "\$n" --arg e "\$exp" '.accounts += [{"user":\$u,"expired":\$e}]' "\$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "\$META_FILE"; systemctl restart "\$SERVICE_NAME" 2>/dev/null; echo -e "\${G}Berhasil!\${NC}"; sleep 1 ;;
-            2|02) read -rp "  User dihapus: " d; jq --arg u "\$d" '.auth.config |= map(select(. != \$u))' "\$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "\$CONFIG_FILE"; jq --arg u "\$d" '.accounts |= map(select(.user != \$u))' "\$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "\$META_FILE"; systemctl restart "\$SERVICE_NAME" 2>/dev/null; echo -e "\${R}Dihapus.\${NC}"; sleep 1 ;;
-            3|03) clear; printf "\${Y}%-18s %-12s\${NC}\n" "USER" "EXPIRED"; echo "------------------------------"; jq -r '.accounts[] | "\(.user) \(.expired)"' "\$META_FILE" | while read -r u e; do printf "%-18s %-12s\n" "\$u" "\$e"; done; read -rp "Enter..." ;;
-            4|04) systemctl restart "\$SERVICE_NAME" 2>/dev/null; echo "Restarted."; sleep 1 ;;
-            5|05) show_system_status ;;
-            6|06) if [ -z "\$TG_BOT_TOKEN" ]; then echo "Setup Telegram Dulu!"; sleep 2; else cp "\$CONFIG_FILE" /tmp/c.json; curl -s -F chat_id="\$TG_CHAT_ID" -F document=@/tmp/c.json https://api.telegram.org/bot\$TG_BOT_TOKEN/sendDocument > /dev/null; echo "Backup Sent!"; sleep 1; fi ;;
-            7|07) restore_telegram ;;
-            8|08) clear; echo -ne "Token: " && read NT; echo -ne "ID: " && read NI; echo "TG_BOT_TOKEN=\"\$NT\"" > "\$TG_CONF"; echo "TG_CHAT_ID=\"\$NI\"" >> "\$TG_CONF"; source "\$TG_CONF"; echo "Saved!"; sleep 1 ;;
-            9|09) wget -q -O /tmp/z.sh "\$GITHUB_URL" && mv /tmp/z.sh "/usr/local/bin/zivpn-manager.sh" && chmod +x "/usr/local/bin/zivpn-manager.sh" && echo "Success!"; sleep 1; exit 0 ;;
-            0|00) exit 0 ;;
-        esac
-    done
-    ;;
-esac
+    case \$choice in
+        1|01) read -rp "  User: " n; read -rp "  Hari: " d; exp=\$(date -d "+\$d days" +%Y-%m-%d); jq --arg u "\$n" '.auth.config += [\$u]' "\$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "\$CONFIG_FILE"; jq --arg u "\$n" --arg e "\$exp" '.accounts += [{"user":\$u,"expired":\$e}]' "\$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "\$META_FILE"; systemctl restart "\$SERVICE_NAME" 2>/dev/null; echo -e "\${G}Berhasil!\${NC}"; sleep 1 ;;
+        2|02) delete_account ;;
+        3|03) clear; printf "\${Y}%-18s %-12s\${NC}\n" "USER" "EXPIRED"; echo "------------------------------"; jq -r '.accounts[] | "\(.user) \(.expired)"' "\$META_FILE" | while read -r u e; do printf "%-18s %-12s\n" "\$u" "\$e"; done; read -rp "Enter..." ;;
+        4|04) systemctl restart "\$SERVICE_NAME" 2>/dev/null; echo "Restarted."; sleep 1 ;;
+        5|05) show_system_status ;;
+        6|06) if [ -z "\$TG_BOT_TOKEN" ]; then echo "Setup Telegram Dulu!"; sleep 2; else cp "\$CONFIG_FILE" /tmp/c.json; curl -s -F chat_id="\$TG_CHAT_ID" -F document=@/tmp/c.json https://api.telegram.org/bot\$TG_BOT_TOKEN/sendDocument > /dev/null; echo "Backup Sent!"; sleep 1; fi ;;
+        7|07) restore_telegram ;;
+        8|08) clear; echo -ne "Token: " && read NT; echo -ne "ID: " && read NI; echo "TG_BOT_TOKEN=\"\$NT\"" > "\$TG_CONF"; echo "TG_CHAT_ID=\"\$NI\"" >> "\$TG_CONF"; source "\$TG_CONF"; echo "Saved!"; sleep 1 ;;
+        9|09) wget -q -O /tmp/z.sh "\$GITHUB_URL" && mv /tmp/z.sh "/usr/local/bin/zivpn-manager.sh" && chmod +x "/usr/local/bin/zivpn-manager.sh" && echo "Success!"; sleep 1; exit 0 ;;
+        0|00) exit 0 ;;
+    esac
+done
 EOF
 
 # --- FINALISASI ---
 chmod +x "$MANAGER_SCRIPT"
 echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT"
 chmod +x "$SHORTCUT"
-(crontab -l 2>/dev/null | grep -v "zivpn-manager.sh cron") | crontab -
-(crontab -l 2>/dev/null; echo "0 0 * * * /usr/local/bin/zivpn-manager.sh cron") | crontab -
 
 clear
-echo -e "${GREEN}✅ STATUS SYSTEM FIXED (V20)!${NC}"
-echo -e "Ketik ${YELLOW}'menu'${NC} untuk mencoba fitur Status."
+echo -e "${GREEN}✅ UPDATE V21: FITUR HAPUS DENGAN NOMOR SELESAI!${NC}"
+echo -e "Ketik ${YELLOW}'menu'${NC} lalu pilih 02 untuk mencoba."
