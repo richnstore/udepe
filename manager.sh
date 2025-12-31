@@ -51,14 +51,12 @@ SERVICE_NAME="zivpn.service"
 
 C='\e[1;36m'; G='\e[1;32m'; Y='\e[1;33m'; R='\e[1;31m'; B='\e[1;34m'; NC='\e[0m'
 
-# ULTIMATE SYNC: Jantung Script (Jangan Dihapus)
+# ULTIMATE SYNC (Data Consistency)
 sync_all() {
-    # 1. Forwarding & IPTables Watchdog
     [ "$(sysctl -n net.ipv4.ip_forward)" != "1" ] && sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
     local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
     iptables -t nat -C POSTROUTING -o "$IF" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o "$IF" -j MASQUERADE
     
-    # 2. Hapus Expired
     local today=$(date +%s); local changed=false
     while read -r acc; do
         [ -z "$acc" ] && continue
@@ -70,7 +68,6 @@ sync_all() {
         fi
     done < <(jq -c '.accounts[]' "$META_FILE" 2>/dev/null)
 
-    # 3. REBUILD CONFIG (Sinkronisasi Meta -> Config)
     local USERS_FROM_META=$(jq -c '[.accounts[].user]' "$META_FILE")
     jq --argjson u "$USERS_FROM_META" '.auth.config = $u' "$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "$CONFIG_FILE"
     
@@ -83,7 +80,7 @@ draw_header() {
     local RAM_U=$(free -h | awk '/Mem:/ {print $3}'); local CPU=$(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}')"%"
     local QDISC=$(sysctl net.core.default_qdisc | awk '{print $3}')
     echo -e "${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
-    echo -e "${C}┃${NC}        ${Y}ZIVPN MANAGER PRO V45${NC}           ${C}┃${NC}"
+    echo -e "${C}┃${NC}        ${Y}ZIVPN INPUT VALIDATION V47${NC}        ${C}┃${NC}"
     echo -e "${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "IP Address" "$IP"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Uptime" "$UP"
@@ -103,12 +100,19 @@ while true; do
     echo -ne "  ${B}Pilih Menu${NC}: " && read choice
     case $choice in
         1|01) 
-            echo -ne "  User: " && read n; echo -ne "  Hari: " && read d
-            [ -z "$n" ] || [ -z "$d" ] && { echo -e "  ${R}Error: Input Kosong!${NC}"; sleep 2; continue; }
+            echo -ne "  User: " && read n
+            # Validasi Step 1: User
+            if [ -z "$n" ]; then echo -e "  ${R}Batal: Username tidak boleh kosong!${NC}"; sleep 2; continue; fi
+            
+            echo -ne "  Hari: " && read d
+            # Validasi Step 2: Hari
+            if [ -z "$d" ]; then echo -e "  ${R}Batal: Durasi hari tidak boleh kosong!${NC}"; sleep 2; continue; fi
+            if ! [[ "$d" =~ ^[0-9]+$ ]]; then echo -e "  ${R}Error: Durasi harus angka!${NC}"; sleep 2; continue; fi
+            
             exp=$(date -d "+$d days" +%Y-%m-%d)
             jq --arg u "$n" --arg e "$exp" '.accounts += [{"user":$u,"expired":$e}]' "$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "$META_FILE"
             sync_all; systemctl restart "$SERVICE_NAME"
-            echo -e "  ${G}Sukses: User $n ditambahkan!${NC}"; sleep 2 ;;
+            echo -e "  ${G}Sukses: User $n aktif hingga $exp${NC}"; sleep 2 ;;
         2|02) 
             mapfile -t LIST < <(jq -r '.accounts[].user' "$META_FILE")
             [ ${#LIST[@]} -eq 0 ] && { echo -e "  ${R}Tidak ada akun!${NC}"; sleep 2; continue; }
@@ -116,12 +120,17 @@ while true; do
                 exp=$(jq -r --arg u "$u" '.accounts[] | select(.user==$u) | .expired' "$META_FILE")
                 echo -e "  $i. $u ($exp)"; ((i++))
             done
-            echo -ne "  Pilih No: " && read idx; target=${LIST[$((idx-1))]}
-            if [ ! -z "$target" ]; then
-                jq --arg u "$target" '.accounts |= map(select(.user != $u))' "$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "$META_FILE"
-                sync_all; systemctl restart "$SERVICE_NAME"
-                echo -e "  ${G}Sukses: Akun $target dihapus!${NC}"
-            else echo -e "  ${R}Pilihan Salah!${NC}"; fi; sleep 2 ;;
+            echo -ne "  Pilih No (Enter = Batal): " && read idx
+            
+            # Validasi Hapus
+            if [ -z "$idx" ]; then echo -e "  ${Y}Dibatalkan.${NC}"; sleep 1; continue; fi
+            if ! [[ "$idx" =~ ^[0-9]+$ ]]; then echo -e "  ${R}Error: Input harus angka!${NC}"; sleep 1; continue; fi
+            if [ "$idx" -lt 1 ] || [ "$idx" -gt "${#LIST[@]}" ]; then echo -e "  ${R}Error: Nomor tidak tersedia!${NC}"; sleep 1; continue; fi
+            
+            target=${LIST[$((idx-1))]}
+            jq --arg u "$target" '.accounts |= map(select(.user != $u))' "$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "$META_FILE"
+            sync_all; systemctl restart "$SERVICE_NAME"
+            echo -e "  ${G}Sukses: Akun $target dihapus!${NC}"; sleep 2 ;;
         3|03) 
             echo -e "\n  ${Y}DAFTAR AKUN ZIVPN:${NC}"
             printf "  %-15s %-12s\n" "USER" "EXPIRED"
@@ -175,13 +184,16 @@ while true; do
                     2)
                         echo -e "\n  ${Y}Input Data Baru:${NC}"
                         echo -ne "  Bot Token Baru: " && read NT
+                        # Validasi Token
+                        if [ -z "$NT" ]; then echo -e "  ${R}Batal: Token tidak boleh kosong!${NC}"; sleep 1; continue; fi
+                        
                         echo -ne "  Chat ID Baru  : " && read NI
-                        if [ -n "$NT" ] && [ -n "$NI" ]; then
-                            echo "TG_BOT_TOKEN=\"$NT\"" > "$TG_CONF"
-                            echo "TG_CHAT_ID=\"$NI\"" >> "$TG_CONF"
-                            echo -e "  ${G}Data Tersimpan!${NC}"
-                        else echo -e "  ${R}Input Kosong! Batalkan.${NC}"; fi
-                        sleep 1 ;;
+                        # Validasi ID
+                        if [ -z "$NI" ]; then echo -e "  ${R}Batal: ID tidak boleh kosong!${NC}"; sleep 1; continue; fi
+                        
+                        echo "TG_BOT_TOKEN=\"$NT\"" > "$TG_CONF"
+                        echo "TG_CHAT_ID=\"$NI\"" >> "$TG_CONF"
+                        echo -e "  ${G}Data Tersimpan!${NC}"; sleep 1; break ;;
                     0) break ;;
                     *) echo -e "  ${R}Invalid!${NC}"; sleep 1 ;;
                 esac
@@ -194,6 +206,7 @@ while true; do
                 echo -e "  ${G}Update Selesai!${NC}"; sleep 2; exit 0
             else echo -e "  ${R}Gagal update!${NC}"; sleep 2; fi ;;
         0|00) exit 0 ;;
+        *) echo -e "  ${R}Pilihan tidak ada!${NC}"; sleep 1 ;;
     esac
 done
 EOF
@@ -205,5 +218,5 @@ echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT" && chmod +x "$SHO
 (crontab -l 2>/dev/null; echo "0 0 * * * /usr/local/bin/zivpn-manager.sh cron") | crontab -
 
 clear
-echo -e "${G}✅ V45 FINAL COMPLETE EDITION INSTALLED!${NC}"
-echo -e "Menu Telegram Settings telah diperbarui. Semua fitur lainnya AMAN & TERKUNCI."
+echo -e "${G}✅ V47 INPUT VALIDATION INSTALLED!${NC}"
+echo -e "Validasi ketat pada menu Tambah, Hapus, dan Setting Telegram telah aktif."
