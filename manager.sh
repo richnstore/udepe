@@ -2,8 +2,8 @@
 
 clear
 echo "=================================================="
-echo "      ZIVPN MANAGER INSTALLER V9.2 (FINAL)"
-echo "    (FIXED SYNTAX + SMART UPDATE + UDP)"
+echo "      ZIVPN MANAGER INSTALLER V9.3 (FINAL)"
+echo "    (FIXED BW + SMART UPDATE + UDP TUNING)"
 echo "=================================================="
 echo ""
 
@@ -64,6 +64,16 @@ CONFIG_FILE="$CONFIG_FILE"
 META_FILE="$META_FILE"
 SERVICE_NAME="zivpn.service"
 MANAGER_SCRIPT="/usr/local/bin/zivpn-manager.sh"
+
+# --- FUNGSI BANDWIDTH ---
+convert_bw() {
+    local bytes=\$1
+    if [ "\$bytes" -gt 1073741824 ]; then
+        awk -v b="\$bytes" 'BEGIN {printf "%.2f GiB", b/1024/1024/1024}'
+    else
+        awk -v b="\$bytes" 'BEGIN {printf "%.2f MiB", b/1024/1024}'
+    fi
+}
 
 system_status() {
     clear
@@ -140,11 +150,22 @@ while true; do
     clear
     sync_accounts
     auto_remove_expired
+    
+    # HITUNG BANDWIDTH
+    NET_IFACE=\$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
+    BW_JSON=\$(vnstat -i "\$NET_IFACE" --json 2>/dev/null)
+    T_Y=\$(date +%Y); T_M=\$(date +%-m); T_D=\$(date +%-d)
+    BW_D_RAW=\$(echo "\$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == \$T_Y and .date.month == \$T_M and .date.day == \$T_D) | .rx // 0" 2>/dev/null)
+    BW_U_RAW=\$(echo "\$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == \$T_Y and .date.month == \$T_M and .date.day == \$T_D) | .tx // 0" 2>/dev/null)
+    BW_D=\$(convert_bw "\${BW_D_RAW:-0}")
+    BW_U=\$(convert_bw "\${BW_U_RAW:-0}")
+
     VPS_IP=\$(curl -s ifconfig.me)
     echo -e "\e[1;32m================================================\e[0m"
     echo -e "\e[1;33m           ZIVPN UDP ACCOUNT MANAGER            \e[0m"
     echo -e "\e[1;32m================================================\e[0m"
     echo -e " IP VPS       : \${VPS_IP}"
+    echo -e " Hari Ini     : \e[1;36m↓ \$BW_D | ↑ \$BW_U\e[0m"
     echo -e "\e[1;32m================================================\e[0m"
     echo -e " 1) Lihat Akun       5) Status System"
     echo -e " 2) Tambah Akun      6) Backup Telegram"
@@ -179,4 +200,5 @@ chmod +x "$SHORTCUT"
 (crontab -l 2>/dev/null; echo "0 0 * * * $MANAGER_SCRIPT cron") | crontab -
 
 clear
-echo "✅ Instalasi Selesai! Ketik 'menu' untuk menjalankan."
+echo "✅ Instalasi Selesai! BW Sekarang Muncul di Menu Utama."
+echo "Ketik 'menu' untuk memulai."
