@@ -2,8 +2,8 @@
 
 clear
 echo "=========================================="
-echo "      ZIVPN MANAGER INSTALLER     "
-echo "    BY RICH NARENDRA STORE     "
+echo "      ZIVPN MANAGER INSTALLER    "
+echo "    BY RICH NARENDRA X GEMINI AI    "
 echo "=========================================="
 echo ""
 
@@ -22,6 +22,23 @@ while true; do
     [ ! -z "$TG_CHAT_ID" ] && break
     echo " ❌ Chat ID wajib diisi!"
 done
+
+echo ""
+echo "[-] Mengonfigurasi Sistem & Kernel..."
+
+# --- TAMBAHAN: IP FORWARD & IPTABLES PERSISTENT ---
+# Install tool penyimpan iptables
+sudo apt-get update
+sudo apt-get install iptables-persistent -y
+
+# Aktifkan IP Forwarding secara permanen
+if ! grep -q "net.ipv4.ip_forward = 1" /etc/sysctl.conf; then
+    echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf
+fi
+sudo sysctl -p
+
+# Simpan aturan yang saat ini aktif ke dalam file konfigurasi
+sudo netfilter-persistent save
 
 # --- KONFIGURASI PATH ---
 CONFIG_FILE="/etc/zivpn/config.json"
@@ -209,4 +226,4 @@ chmod +x "$SHORTCUT"
 (crontab -l 2>/dev/null; echo "0 0 * * * $MANAGER_SCRIPT cron") | crontab -
 
 clear
-echo "✅ Instalasi Berhasil! Ketik 'menu' untuk membuka menu."
+echo "✅ Instalasi Berhasil! Ketik 'menu' sekarang."
