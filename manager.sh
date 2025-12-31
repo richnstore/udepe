@@ -33,46 +33,77 @@ GITHUB_URL="https://raw.githubusercontent.com/richnstore/udepe/main/manager.sh"
 # Warna Harmony V17
 C='\e[1;36m'; G='\e[1;32m'; Y='\e[1;33m'; R='\e[1;31m'; B='\e[1;34m'; NC='\e[0m'
 
-# --- FUNGSI HAPUS AKUN (DENGAN NOMOR) ---
+# --- FUNGSI RESTORE TELEGRAM (FIXED) ---
+restore_telegram() {
+    clear
+    echo -e "\${C}┏━━━━━━━━━━━━━\${Y} RESTORE VIA TELEGRAM \${C}━━━━━━━━━━━━┓\${NC}"
+    
+    # PERINGATAN JIKA TELEGRAM BELUM AKTIF
+    if [ -z "\$TG_BOT_TOKEN" ] || [ -z "\$TG_CHAT_ID" ]; then
+        echo -e "  \${R}⚠️ PERINGATAN:\${NC}"
+        echo -e "  Anda belum mengaktifkan/setting Bot Telegram."
+        echo -e "  Silakan masuk ke menu \${Y}[08]\${NC} terlebih dahulu."
+        echo -e "\${C}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\${NC}"
+        read -rp " Tekan Enter untuk kembali..." ; return
+    fi
+
+    echo -e "  \${Y}[-]\${NC} Menghubungi Server Telegram..."
+    
+    # Mengambil list file dari bot
+    local UPDATES=\$(curl -s "https://api.telegram.org/bot\$TG_BOT_TOKEN/getUpdates")
+    local FILE_ID=\$(echo "\$UPDATES" | jq -r '.result | reverse | .[] | select(.message.document.file_name=="config.json") | .message.document.file_id' | head -n 1)
+
+    if [ -z "\$FILE_ID" ] || [ "\$FILE_ID" == "null" ]; then
+        echo -e "  \${R}❌ Gagal: Tidak ditemukan file backup 'config.json'\${NC}"
+        echo -e "  Pastikan Anda sudah melakukan Backup (Menu 06) sebelumnya."
+        read -rp " Tekan Enter..." ; return
+    fi
+
+    echo -e "  \${Y}[-]\${NC} Mengunduh data konfigurasi..."
+    local FILE_PATH=\$(curl -s "https://api.telegram.org/bot\$TG_BOT_TOKEN/getFile?file_id=\$FILE_ID" | jq -r '.result.file_path')
+    
+    if [ -z "\$FILE_PATH" ] || [ "\$FILE_PATH" == "null" ]; then
+        echo -e "  \${R}❌ Gagal mengambil path file dari Telegram.\${NC}"
+        read -rp " Tekan Enter..." ; return
+    fi
+
+    wget -q -O "/tmp/restore_config.json" "https://api.telegram.org/file/bot\$TG_BOT_TOKEN/\$FILE_PATH"
+
+    if [ -s "/tmp/restore_config.json" ]; then
+        mv "/tmp/restore_config.json" "\$CONFIG_FILE"
+        systemctl restart "\$SERVICE_NAME" 2>/dev/null
+        echo -e "  \${G}✅ Berhasil! Konfigurasi telah dipulihkan.\${NC}"
+    else
+        echo -e "  \${R}❌ Gagal download atau file kosong.\${NC}"
+    fi
+    sleep 2
+}
+
+# --- FUNGSI HAPUS AKUN (NOMOR) ---
 delete_account() {
     clear
     echo -e "\${C}┏━━━━━━━━━━━━━━\${Y} HAPUS AKUN ZIVPN \${C}━━━━━━━━━━━━━━┓\${NC}"
-    
-    # Ambil daftar user
     mapfile -t USER_LIST < <(jq -r '.auth.config[]' "\$CONFIG_FILE")
-    
     if [ \${#USER_LIST[@]} -eq 0 ]; then
         printf " \${C}┃\${NC} \${R}%-40s\${NC} \${C}┃\${NC}\n" "Tidak ada akun yang terdaftar."
         echo -e "\${C}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\${NC}"
         sleep 2; return
     fi
-
-    # Tampilkan daftar dengan nomor
     index=1
     for user in "\${USER_LIST[@]}"; do
         printf " \${C}┃\${NC}  \${Y}[%02d]\${NC} %-34s \${C}┃\${NC}\n" "\$index" "\$user"
         ((index++))
     done
     echo -e "\${C}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\${NC}"
-    
-    echo -ne "  \${B}Pilih Nomor User yang akan dihapus\${NC}: " && read user_idx
-    
-    # Validasi input nomor
+    echo -ne "  \${B}Pilih Nomor\${NC}: " && read user_idx
     if [[ ! "\$user_idx" =~ ^[0-9]+\$ ]] || [ "\$user_idx" -lt 1 ] || [ "\$user_idx" -ge "\$index" ]; then
-        echo -e "  \${R}❌ Nomor tidak valid!\${NC}"
-        sleep 1; return
+        echo -e "  \${R}Nomor tidak valid!\${NC}"; sleep 1; return
     fi
-
-    # Ambil nama user berdasarkan index (array mulai dari 0)
     target_user=\${USER_LIST[\$((user_idx-1))]}
-
-    # Proses Hapus
     jq --arg u "\$target_user" '.auth.config |= map(select(. != \$u))' "\$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "\$CONFIG_FILE"
     jq --arg u "\$target_user" '.accounts |= map(select(.user != \$u))' "\$META_FILE" > /tmp/meta.tmp && mv /tmp/meta.tmp "\$META_FILE"
-    
     systemctl restart "\$SERVICE_NAME" 2>/dev/null
-    echo -e "  \${G}✅ Akun [\$target_user] Berhasil Dihapus!\${NC}"
-    sleep 2
+    echo -e "  \${G}✅ [\$target_user] Dihapus!\${NC}"; sleep 2
 }
 
 # --- FUNGSI STATUS SYSTEM ---
@@ -94,7 +125,7 @@ show_system_status() {
     read -rp " Tekan [Enter] untuk kembali..."
 }
 
-# --- FUNGSI CORE ---
+# --- FUNGSI HEADER ---
 draw_header() {
     clear
     VPS_IP=\$(curl -s ifconfig.me)
@@ -107,7 +138,7 @@ draw_header() {
     BW_U=\$(awk -v b="\$BW_U_RAW" 'BEGIN {printf "%.2f MB", b/1024/1024}')
 
     echo -e "\${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\${NC}"
-    echo -e "\${C}┃\${NC}      \${Y}ZIVPN HARMONY PANEL V21\${NC}       \${C}┃\${NC} \${B}IP:\${NC} \${G}\$VPS_IP\${NC}"
+    echo -e "\${C}┃\${NC}      \${Y}ZIVPN HARMONY PANEL V22\${NC}       \${C}┃\${NC} \${B}IP:\${NC} \${G}\$VPS_IP\${NC}"
     echo -e "\${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\${NC}"
     echo -e "\${C}┃\${NC} \${B}Traffic Hari Ini:\${NC} \${G}↓\$BW_D\${NC} | \${R}↑\$BW_U\${NC}"
     echo -e "\${C}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\${NC}"
@@ -145,5 +176,5 @@ echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT"
 chmod +x "$SHORTCUT"
 
 clear
-echo -e "${GREEN}✅ UPDATE V21: FITUR HAPUS DENGAN NOMOR SELESAI!${NC}"
-echo -e "Ketik ${YELLOW}'menu'${NC} lalu pilih 02 untuk mencoba."
+echo -e "${GREEN}✅ UPDATE V22: RESTORE FIX & TELEGRAM ALERT READY!${NC}"
+echo -e "Pastikan sudah setting di menu 08 sebelum Restore."
