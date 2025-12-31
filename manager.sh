@@ -29,7 +29,7 @@ TG_BOT_TOKEN="6506568094:AAFXpDoZs3lb0tqGGToUMI7pyYQ-_vSY5F8"
 TG_CHAT_ID="6132013792"
 LOG_FILE="/var/log/zivpn-expired.log"
 
-# --- FUNGSI HELPER & KALIBRASI BW ---
+# --- FUNGSI HELPER ---
 convert_bw() {
     local bytes=$1
     if [ "$bytes" -gt 1073741824 ]; then
@@ -75,12 +75,16 @@ auto_remove_expired() {
     [ "$changed" = true ] && systemctl restart "$SERVICE_NAME" >/dev/null 2>&1
 }
 
+# --- FUNGSI RESTORE FIXED ---
 restore_accounts() {
     clear
-    echo "=== RESTORE AKUN ZIVPN ==="
+    echo "===================================="
+    echo "       RESTORE AKUN ZIVPN"
+    echo "===================================="
     echo "1) Restore dari Backup Lokal"
-    echo "2) Restore via Telegram (Auto)"
+    echo "2) Restore via Telegram (File JSON)"
     echo "0) Kembali"
+    echo "------------------------------------"
     read -rp "Pilih: " rest_opt
     case $rest_opt in
         1)
@@ -88,20 +92,38 @@ restore_accounts() {
                 cp /etc/zivpn/backup_config.json "$CONFIG_FILE"
                 cp /etc/zivpn/backup_meta.json "$META_FILE"
                 systemctl restart "$SERVICE_NAME"
-                echo "✅ Restore Berhasil!"; sleep 2
+                echo "✅ Restore Lokal Berhasil!"; sleep 2
+            else
+                echo "❌ Backup lokal tidak ditemukan!"; sleep 2
             fi ;;
         2)
-            echo "Mencari file di Telegram..."
-            FILE_DATA=$(curl -s "https://api.telegram.org/bot$TG_BOT_TOKEN/getUpdates" | jq -r '.result | map(select(.message.document != null)) | last')
-            FILE_ID=$(echo "$FILE_DATA" | jq -r '.message.document.file_id // empty')
-            FILE_NAME=$(echo "$FILE_DATA" | jq -r '.message.document.file_name // empty')
-            if [ ! -z "$FILE_ID" ]; then
+            echo "Menghubungi Bot Telegram..."
+            UPDATES=$(curl -s "https://api.telegram.org/bot$TG_BOT_TOKEN/getUpdates")
+            # Mencari pesan dokumen terbaru
+            FILE_ID=$(echo "$UPDATES" | jq -r '.result | map(select(.message.document != null)) | last | .message.document.file_id // empty')
+            FILE_NAME=$(echo "$UPDATES" | jq -r '.result | map(select(.message.document != null)) | last | .message.document.file_name // empty')
+
+            if [ -z "$FILE_ID" ] || [ "$FILE_ID" == "null" ]; then
+                echo "❌ Gagal: Tidak ada file di history Bot (24 jam terakhir)."
+                echo "Silakan kirim/forward file JSON ke Bot sekarang!"
+                sleep 3
+            else
+                echo "Ditemukan: $FILE_NAME"
+                echo "Sedang mengunduh..."
                 FILE_PATH=$(curl -s "https://api.telegram.org/bot$TG_BOT_TOKEN/getFile?file_id=$FILE_ID" | jq -r '.result.file_path')
                 curl -s -o "/tmp/$FILE_NAME" "https://api.telegram.org/file/bot$TG_BOT_TOKEN/$FILE_PATH"
-                [[ "$FILE_NAME" == *"config.json"* ]] && mv "/tmp/$FILE_NAME" "$CONFIG_FILE"
-                [[ "$FILE_NAME" == *"meta.json"* ]] && mv "/tmp/$FILE_NAME" "$META_FILE"
+                
+                if [[ "$FILE_NAME" == *"config.json"* ]]; then
+                    cp "/tmp/$FILE_NAME" "$CONFIG_FILE"
+                    echo "✅ config.json di-update."
+                elif [[ "$FILE_NAME" == *"meta.json"* ]]; then
+                    cp "/tmp/$FILE_NAME" "$META_FILE"
+                    echo "✅ meta.json di-update."
+                else
+                    echo "❌ File bukan backup valid."
+                fi
                 systemctl restart "$SERVICE_NAME"
-                echo "✅ Restore $FILE_NAME Berhasil!"; sleep 2
+                echo "✅ Selesai."; sleep 2
             fi ;;
     esac
 }
@@ -123,7 +145,6 @@ case "$1" in
             ISP_NAME=$(curl -s https://ipinfo.io/org | cut -d' ' -f2- || echo "Error")
             NET_IFACE=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
             
-            # Ambil Bandwidth Hari Ini
             BW_JSON=$(vnstat -i "$NET_IFACE" --json 2>/dev/null)
             T_Y=$(date +%Y); T_M=$(date +%-m); T_D=$(date +%-d)
             BW_D_RAW=$(echo "$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == $T_Y and .date.month == $T_M and .date.day == $T_D) | .rx // 0" 2>/dev/null)
@@ -155,7 +176,7 @@ case "$1" in
                 2) read -rp "User: " n; read -rp "Hari: " d; [[ ! "$d" =~ ^[0-9]+$ ]] && d=30; exp=$(date -d "+$d days" +%Y-%m-%d); jq --arg u "$n" '.auth.config += [$u]' "$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "$CONFIG_FILE"; jq --arg u "$n" --arg e "$exp" '.accounts += [{"user":$u,"expired":$e}]' "$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "$META_FILE"; systemctl restart "$SERVICE_NAME"; send_tg "✅ <b>AKUN BARU</b>%0AUser: <code>$n</code>%0AExp: <code>$exp</code>";;
                 3) read -rp "User: " d; jq --arg u "$d" '.auth.config |= map(select(. != $u))' "$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "$CONFIG_FILE"; jq --arg u "$d" '.accounts |= map(select(.user != $u))' "$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "$META_FILE"; systemctl restart "$SERVICE_NAME"; echo "Dihapus."; sleep 1 ;;
                 4) systemctl restart "$SERVICE_NAME"; echo "Restarted."; sleep 1 ;;
-                5) clear; echo "=== SYSTEM STATUS ==="; uptime; free -h; df -h /; echo "====================="; read -rp "Enter..." ;;
+                5) clear; uptime; free -h; df -h /; read -rp "Enter..." ;;
                 6) cp "$CONFIG_FILE" /etc/zivpn/backup_config.json; cp "$META_FILE" /etc/zivpn/backup_meta.json; curl -s -F chat_id="$TG_CHAT_ID" -F document=@/etc/zivpn/backup_config.json https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument > /dev/null; curl -s -F chat_id="$TG_CHAT_ID" -F document=@/etc/zivpn/backup_meta.json https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument > /dev/null; echo "Backup terkirim!"; sleep 1 ;;
                 7) restore_accounts ;;
                 0) exit 0 ;;
@@ -173,11 +194,11 @@ sudo bash $MANAGER_SCRIPT
 EOF
 chmod +x "$SHORTCUT"
 
-# 4. Set Cron Jam 00:00
+# 4. Cron Job 00:00
 (crontab -l 2>/dev/null | grep -v "$MANAGER_SCRIPT cron") | crontab -
 (crontab -l 2>/dev/null; echo "0 0 * * * $MANAGER_SCRIPT cron") | crontab -
 
 clear
 echo "=========================================="
-echo "      ZIVPN MANAGER INSTALLED"
+echo "      ZIVPN MANAGER INSTALLED    "
 echo "=========================================="
