@@ -2,8 +2,8 @@
 
 clear
 echo "=========================================="
-echo "      ZIVPN MANAGER INSTALLER V6.1"
-echo "    (FIXED SYNTAX & FULL FEATURES)"
+echo "      ZIVPN MANAGER INSTALLER     "
+echo "    BY RICH NARENDRA STORE     "
 echo "=========================================="
 echo ""
 
@@ -209,4 +209,4 @@ chmod +x "$SHORTCUT"
 (crontab -l 2>/dev/null; echo "0 0 * * * $MANAGER_SCRIPT cron") | crontab -
 
 clear
-echo "✅ Instalasi Berhasil Fix! Ketik 'menu' sekarang."
+echo "✅ Instalasi Berhasil! Ketik 'menu' untuk membuka menu."
