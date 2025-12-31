@@ -1,10 +1,14 @@
 #!/bin/bash
 
-# --- 1. PRE-INSTALLATION ---
-apt-get update -qq && apt-get install jq vnstat curl wget sudo lsb-release zip unzip net-tools cron iptables-persistent -y -qq
+# --- 1. PRE-INSTALLATION & FIREWALL SAVE ---
+# Install tools dasar + IPTABLES PERSISTENT (Wajib ada)
+apt-get update -qq && apt-get install jq vnstat curl wget sudo lsb-release zip unzip net-tools cron iptables-persistent netfilter-persistent -y -qq
 
-# Simpan rule firewall yang sudah ada (sesuai request V63)
+# --- PENTING: SIMPAN ATURAN FIREWALL YANG ADA SEKARANG ---
+# Script ini tidak membuat aturan baru, tapi menyimpan aturan dari script lain Anda
+# agar tidak hilang saat reboot.
 netfilter-persistent save >/dev/null 2>&1
+netfilter-persistent reload >/dev/null 2>&1
 
 # --- 2. CONFIG SETUP ---
 CONFIG_DIR="/etc/zivpn"
@@ -30,7 +34,14 @@ META_FILE="/etc/zivpn/accounts_meta.json"
 TWEAK_FILE="/etc/sysctl.d/99-zivpn-turbo.conf"
 SERVICE_NAME="zivpn.service"
 
+# Warna UI
 C='\e[1;36m'; G='\e[1;32m'; Y='\e[1;33m'; R='\e[1;31m'; B='\e[1;34m'; NC='\e[0m'
+
+# Helper: Tunggu Enter
+wait_enter() {
+    echo -e ""
+    read -rp "  Tekan Enter untuk kembali..."
+}
 
 send_notif() {
     if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
@@ -39,9 +50,9 @@ send_notif() {
     fi
 }
 
-# --- SMART AUTO-SYNC (JANTUNG OTOMATISASI) ---
+# --- SMART AUTO-SYNC (AUTO HEALING) ---
 sync_all() {
-    # 1. Pastikan Config 0.0.0.0
+    # 1. Force Listen 0.0.0.0
     local CUR_L=$(jq -r '.listen' "$CONFIG_FILE")
     if [[ "$CUR_L" != "0.0.0.0:"* ]]; then
         local PORT=$(echo "$CUR_L" | grep -oE '[0-9]+$'); [ -z "$PORT" ] && PORT="5667"
@@ -62,32 +73,20 @@ sync_all() {
         fi
     done < <(jq -c '.accounts[]' "$META_FILE" 2>/dev/null)
 
-    # 3. DETEKSI PERBEDAAN (Meta vs Config)
-    # Ambil list user dari Meta (Source of Truth)
+    # 3. Sync Meta -> Config
     local USERS_META=$(jq -c '.accounts[].user' "$META_FILE" | sort | jq -s '.')
-    # Ambil list user dari Config (Current State)
     local USERS_CONF=$(jq -c '.auth.config' "$CONFIG_FILE" | jq -r '.[]' | sort | jq -s '.')
 
-    # Jika beda, atau ada user expired, atau force restart -> UPDATE & RESTART
     if [ "$USERS_META" != "$USERS_CONF" ] || [ "$meta_changed" = true ] || [ "$FORCE_RESTART" = true ]; then
-        # Tulis ulang config.json dengan data user yang benar dari Meta
         jq --argjson u "$USERS_META" '.auth.config = $u' "$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "$CONFIG_FILE"
-        
-        # Restart Service
         systemctl restart "$SERVICE_NAME" >/dev/null 2>&1
-        
-        # Jika dipanggil via cron, log perbaikan (opsional)
-        if [ "$1" == "cron_check" ]; then echo "$(date): Auto-Repaired Auth" >> /var/log/zivpn-autorepair.log; fi
     fi
 }
 
-# --- CRON HANDLER ---
-if [ "$1" == "cron" ]; then
-    sync_all "cron_check"
-    exit 0
-fi
+# CRON CHECK
+if [ "$1" == "cron" ]; then sync_all "cron_check"; exit 0; fi
 
-# TWEAK & UI Functions
+# TWEAK FUNCTION
 manage_tweaks() {
     if [ "$1" == "on" ]; then
         cat <<EOT > "$TWEAK_FILE"
@@ -109,36 +108,28 @@ EOT
 draw_header() {
     clear
     local IP=$(curl -s ifconfig.me || echo "No IP"); local UP=$(uptime -p | sed 's/up //')
-    local RAM_U=$(free -h | awk '/Mem:/ {print $3}'); local CPU=$(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}')"%"
-    
     local CUR_PORT=$(jq -r '.listen' "$CONFIG_FILE" | cut -d':' -f2)
     local BIND_STAT=$(netstat -tulpn | grep ":$CUR_PORT " | grep -v ":::" | awk '{print $4}')
     [[ ! -z "$BIND_STAT" ]] && PORT_STATUS="${G}Running ($CUR_PORT)${NC}" || PORT_STATUS="${R}Service Down${NC}"
-
     local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
     local BW_JSON=$(vnstat -i "$IF" --json 2>/dev/null)
     local T_D=$(date +%-d); local T_M=$(date +%-m); local T_Y=$(date +%Y)
     local RX=$(echo "$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == $T_Y and .date.month == $T_M and .date.day == $T_D) | .rx // 0" 2>/dev/null)
     local TX=$(echo "$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == $T_Y and .date.month == $T_M and .date.day == $T_D) | .tx // 0" 2>/dev/null)
     local BW_STR="↓$(awk -v b="$RX" 'BEGIN {printf "%.2f", b/1024/1024}') MB | ↑$(awk -v b="$TX" 'BEGIN {printf "%.2f", b/1024/1024}') MB"
+    if [ -f "$TWEAK_FILE" ]; then TWEAK_STAT="${G}ON${NC}"; else TWEAK_STAT="${R}OFF${NC}"; fi
 
     echo -e "${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
-    echo -e "${C}┃${NC}        ${Y}ZIVPN AUTO-HEALING V65${NC}          ${C}┃${NC}"
+    echo -e "${C}┃${NC}       ${Y}ZIVPN MANAGER V70 (CONSISTENT)${NC}      ${C}┃${NC}"
     echo -e "${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
-    printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "IP Address" "$IP"
-    printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Uptime" "$UP"
-    printf " ${C}┃${NC} %-12s : %-37s ${C}┃${NC}\n" "Service Port" "$PORT_STATUS"
-    if [ -f "$TWEAK_FILE" ]; then 
-        printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Turbo Tweak" "[ON] Active"
-    else 
-        printf " ${C}┃${NC} %-12s : ${R}%-26s${NC} ${C}┃${NC}\n" "Turbo Tweak" "[OFF] Default"
-    fi
-    printf " ${C}┃${NC} %-12s : ${Y}%-26s${NC} ${C}┃${NC}\n" "Daily BW" "$BW_STR"
+    printf "${C}┃${NC} %-12s : %-26s ${C}┃${NC}\n" "IP Address" "$IP"
+    printf "${C}┃${NC} %-12s : %-37s ${C}┃${NC}\n" "Service Port" "$PORT_STATUS"
+    printf "${C}┃${NC} %-12s : %-37s ${C}┃${NC}\n" "Turbo Tweak" "$TWEAK_STAT"
+    printf "${C}┃${NC} %-12s : ${Y}%-26s${NC} ${C}┃${NC}\n" "Daily BW" "$BW_STR"
     echo -e "${C}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}"
 }
 
 while true; do
-    # Jalankan Sync setiap buka menu (Double check)
     sync_all; draw_header
     echo -e "  ${C}[${Y}01${C}]${NC} Tambah Akun           ${C}[${Y}05${C}]${NC} Backup ZIP"
     echo -e "  ${C}[${Y}02${C}]${NC} Hapus Akun            ${C}[${Y}06${C}]${NC} Restore ZIP"
@@ -149,51 +140,86 @@ while true; do
     echo -ne "  ${B}Pilih Menu${NC}: " && read choice
     case $choice in
         1|01) 
-            echo -ne "  User: " && read n; [ -z "$n" ] && continue
-            echo -ne "  Hari: " && read d; [[ ! "$d" =~ ^[0-9]+$ ]] && continue
+            echo -ne "  User: " && read n
+            if [ -z "$n" ]; then echo -e "  ${R}Batal: User kosong!${NC}"; wait_enter; continue; fi
+            echo -ne "  Hari: " && read d
+            if [[ ! "$d" =~ ^[0-9]+$ ]]; then echo -e "  ${R}Batal: Hari harus angka!${NC}"; wait_enter; continue; fi
             exp=$(date -d "+$d days" +%Y-%m-%d)
             jq --arg u "$n" --arg e "$exp" '.accounts += [{"user":$u,"expired":$e}]' "$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "$META_FILE"
             sync_all; send_notif "✅ <b>NEW USER</b>%0AUser: <code>$n</code>%0AExp: $exp"
-            echo -e "  ${G}Sukses: User $n Aktif.${NC}"; sleep 2 ;;
+            echo -e "  ${G}Sukses: User $n Aktif.${NC}"; wait_enter ;;
         2|02) 
             mapfile -t LIST < <(jq -r '.accounts[].user' "$META_FILE")
-            [ ${#LIST[@]} -eq 0 ] && { echo -e "  ${R}Kosong.${NC}"; sleep 1; continue; }
+            if [ ${#LIST[@]} -eq 0 ]; then echo -e "  ${R}Tidak ada user.${NC}"; wait_enter; continue; fi
+            echo -e "  ${Y}=== HAPUS USER ===${NC}"
             i=1; for u in "${LIST[@]}"; do echo "  $i. $u"; ((i++)); done
-            echo -ne "  No: " && read idx
+            echo -ne "  Pilih No (Enter=Batal): " && read idx
             if [[ "$idx" =~ ^[0-9]+$ ]] && [ "$idx" -ge 1 ] && [ "$idx" -le "${#LIST[@]}" ]; then
                 target=${LIST[$((idx-1))]}
                 jq --arg u "$target" '.accounts |= map(select(.user != $u))' "$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "$META_FILE"
                 sync_all; send_notif "❌ <b>DELETED</b>: $target"
-                echo -e "  ${G}Dihapus: $target${NC}"; sleep 2
-            else echo -e "  ${R}Batal.${NC}"; sleep 1; fi ;;
+                echo -e "  ${G}Sukses: $target dihapus.${NC}";
+            else echo -e "  ${Y}Dibatalkan.${NC}"; fi; wait_enter ;;
         3|03) 
-            printf "  %-15s %-12s\n" "USER" "EXPIRED"
-            jq -r '.accounts[] | "\(.user) \(.expired)"' "$META_FILE" | while read -r u e; do printf "  %-15s %-12s\n" "$u" "$e"; done
-            read -rp "  Enter..." ;;
-        4|04) systemctl restart "$SERVICE_NAME"; echo -e " ${G}DONE!${NC}"; sleep 1 ;;
+            echo -e "\n  ${Y}=== DAFTAR AKUN ZIVPN ===${NC}"
+            printf "  ${B}%-4s %-16s %-12s${NC}\n" "NO" "USERNAME" "EXPIRED"
+            echo "  ------------------------------------"
+            i=1
+            while IFS=$'\t' read -r user exp; do
+                printf "  ${C}%-4s ${NC}%-16s ${Y}%-12s${NC}\n" "$i" "$user" "$exp"
+                ((i++))
+            done < <(jq -r '.accounts[] | "\(.user)\t\(.expired)"' "$META_FILE")
+            echo "  ------------------------------------"
+            wait_enter ;;
+        4|04) 
+            echo -ne "  Restarting..."; systemctl restart "$SERVICE_NAME"; echo -e " ${G}OK!${NC}"; wait_enter ;;
         5|05) 
-            ZIP="/tmp/zivpn_backup.zip"; zip -j "$ZIP" "$CONFIG_FILE" "$META_FILE" >/dev/null
-            [ -n "$TG_BOT_TOKEN" ] && curl -s -F chat_id="$TG_CHAT_ID" -F document=@"$ZIP" "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument" >/dev/null
-            rm -f "$ZIP"; echo -e " ${G}Selesai.${NC}"; sleep 2 ;;
+            if [ -z "$TG_BOT_TOKEN" ]; then echo -e "  ${R}Set Telegram dulu!${NC}"; wait_enter; continue; fi
+            echo -ne "  Backup..."; ZIP="/tmp/zivpn_backup.zip"
+            zip -j "$ZIP" "$CONFIG_FILE" "$META_FILE" >/dev/null
+            curl -s -F chat_id="$TG_CHAT_ID" -F document=@"$ZIP" "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument" >/dev/null
+            rm -f "$ZIP"; echo -e " ${G}Terkirim!${NC}"; wait_enter ;;
         6|06) 
-            [ -z "$TG_BOT_TOKEN" ] && { echo "Set Telegram dulu."; sleep 1; continue; }
+            if [ -z "$TG_BOT_TOKEN" ]; then echo -e "  ${R}Set Telegram dulu!${NC}"; wait_enter; continue; fi
+            echo -e "  ${Y}Cek backup...${NC}"
             JSON=$(curl -s "https://api.telegram.org/bot$TG_BOT_TOKEN/getUpdates?limit=100")
             FID=$(echo "$JSON" | jq -r '.result | reverse | .[] | select(.message.document != null) | .message.document.file_id' | head -n 1)
-            FPATH=$(curl -s "https://api.telegram.org/bot$TG_BOT_TOKEN/getFile?file_id=$FID" | jq -r '.result.file_path')
-            wget -q -O /tmp/r.zip "https://api.telegram.org/file/bot$TG_BOT_TOKEN/$FPATH"
-            [ -s /tmp/r.zip ] && unzip -o /tmp/r.zip -d /etc/zivpn/ && systemctl restart "$SERVICE_NAME" && echo -e " ${G}Sukses!${NC}" || echo -e " ${R}Gagal!${NC}"
-            rm -f /tmp/r.zip; sleep 2 ;;
+            if [ -z "$FID" ] || [ "$FID" == "null" ]; then echo -e "  ${R}ZIP tidak ditemukan.${NC}"; else
+                FPATH=$(curl -s "https://api.telegram.org/bot$TG_BOT_TOKEN/getFile?file_id=$FID" | jq -r '.result.file_path')
+                wget -q -O /tmp/restore.zip "https://api.telegram.org/file/bot$TG_BOT_TOKEN/$FPATH"
+                [ -s /tmp/restore.zip ] && unzip -o /tmp/restore.zip -d /etc/zivpn/ >/dev/null && echo -e "  ${G}Restore Sukses!${NC}" || echo -e "  ${R}Gagal.${NC}"
+                rm -f /tmp/r.zip
+            fi; wait_enter ;;
         7|07)
-            echo -e " 1. Cek\n 2. Ubah"; read o
-            if [ "$o" == "2" ]; then
-                echo -ne " Token: " && read NT; echo -ne " ID: " && read NI
-                echo "TG_BOT_TOKEN=\"$NT\"" > "$TG_CONF"; echo "TG_CHAT_ID=\"$NI\"" >> "$TG_CONF"
-            else source "$TG_CONF"; echo " Token: $TG_BOT_TOKEN"; fi; read -rp " Enter..." ;;
+            while true; do
+                clear; echo -e "${C}=== TELEGRAM ===${NC}"
+                echo -e "  Token: ${TG_BOT_TOKEN:-Belum Diset}"
+                echo -e "  ID   : ${TG_CHAT_ID:-Belum Diset}"
+                echo -e "  1. Ubah | 0. Kembali"
+                echo -ne "  Pilih: " && read o
+                case $o in
+                    1) echo -ne "  Token: " && read NT; echo -ne "  ID: " && read NI; 
+                       echo "TG_BOT_TOKEN=\"$NT\"" > "$TG_CONF"; echo "TG_CHAT_ID=\"$NI\"" >> "$TG_CONF"; source "$TG_CONF"; break ;;
+                    0) break ;;
+                esac
+            done ;;
         8|08)
-            echo -e " 1. Enable Turbo\n 2. Disable Turbo"; read tw
-            [ "$tw" == "1" ] && manage_tweaks "on"; [ "$tw" == "2" ] && manage_tweaks "off"; sleep 2 ;;
-        9|09) wget -q -O /tmp/z.sh "https://raw.githubusercontent.com/richnstore/udepe/main/manager.sh" && mv /tmp/z.sh "$MANAGER_PATH" && chmod +x "$MANAGER_PATH" && exit 0 ;;
+            echo -e "  1. ON  (Optimized)\n  2. OFF (Default)"
+            echo -ne "  Pilih: " && read tw
+            [ "$tw" == "1" ] && manage_tweaks "on"; [ "$tw" == "2" ] && manage_tweaks "off"; wait_enter ;;
+        9|09)
+            echo -e "  ${Y}Sedang mengecek update...${NC}"
+            wget -q -O /tmp/z.sh "https://raw.githubusercontent.com/richnstore/udepe/main/manager.sh"
+            if [ -s /tmp/z.sh ]; then
+                mv /tmp/z.sh "$MANAGER_PATH" && chmod +x "$MANAGER_PATH"
+                echo -e "  ${G}Berhasil diupdate! Script akan restart...${NC}"
+                sleep 2; exit 0
+            else
+                echo -e "  ${R}Gagal download update!${NC}"
+                wait_enter
+            fi ;;
         0|00) exit 0 ;;
+        *) echo -e "  ${R}Salah.${NC}"; sleep 1 ;;
     esac
 done
 EOF
@@ -201,15 +227,11 @@ EOF
 chmod +x "/usr/local/bin/zivpn-manager.sh"
 echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT" && chmod +x "$SHORTCUT"
 
-# --- INSTALL CRON PER MENIT (AUTO-HEALING) ---
-# Cron ini akan mengecek database setiap 1 menit.
-# Jika ada user yang terdaftar tapi tidak bisa login (Auth Wrong),
-# script otomatis memperbaikinya saat menit berganti.
+# INSTALL CRON
 (crontab -l 2>/dev/null | grep -v "zivpn-manager.sh") | crontab -
 (crontab -l 2>/dev/null; echo "* * * * * /usr/local/bin/zivpn-manager.sh cron") | crontab -
 (crontab -l 2>/dev/null; echo "@reboot /usr/local/bin/zivpn-manager.sh cron") | crontab -
 
 clear
-echo -e "${G}✅ V65 FULLY AUTOMATIC INSTALLED!${NC}"
-echo -e "Sistem Auto-Healing aktif setiap 1 menit."
-echo -e "Masalah 'Auth Wrong' akan diperbaiki sendiri oleh sistem secara otomatis."
+echo -e "${G}✅ V70 ULTIMATE CONSISTENT INSTALLED!${NC}"
+echo -e "IPTables Persistent terinstall & Rule Firewall saat ini TELAH DISIMPAN."
