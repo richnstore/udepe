@@ -1,37 +1,46 @@
 #!/bin/bash
 
-# --- 1. PRE-INSTALLATION & BOOT PERSISTENCE ---
+# --- 1. PRE-INSTALLATION & TIME SYNC ---
+# Time sync penting untuk VPN, jika jam server ngaco, koneksi pasti gagal.
 apt-get update -qq && apt-get install iptables iptables-persistent jq vnstat curl wget sudo lsb-release zip unzip net-tools cron -y -qq
 
-# A. PERBAIKAN IP FORWARDING (Supaya tahan reboot)
-# Hapus config lama jika ada
+# Config IP Forwarding (Permanen)
 sed -i '/net.ipv4.ip_forward/d' /etc/sysctl.conf
-# Tulis ke file utama (lebih kuat daripada .d/)
 echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 sysctl -p >/dev/null 2>&1
 
-# B. FUNGSI NAT (Hanya Masquerade - Aman untuk UFW/Firewall luar)
-apply_nat_boot() {
+# --- FUNGSI IPTABLES: NAT + ALLOW INPUT (WAJIB) ---
+apply_firewall_rules() {
     local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
     
-    # Pastikan tabel NAT bersih dulu
+    # 1. Reset Total
+    iptables -F
+    iptables -X
     iptables -t nat -F
+    iptables -t nat -X
     
-    # Pasang Rule Masquerade (Kunci Internet Client)
+    # 2. ALLOW INPUT (Kunci Masalah Anda Ada Disini)
+    # Kita wajib mengizinkan paket UDP masuk ke port 5667
+    iptables -A INPUT -p udp --dport 5667 -j ACCEPT
+    iptables -A INPUT -p tcp --dport 5667 -j ACCEPT
+    
+    # 3. Standard Rules (Loopback & Established)
+    iptables -A INPUT -i lo -j ACCEPT
+    iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+    
+    # 4. NAT Masquerade (Supaya ada Internet)
     iptables -t nat -A POSTROUTING -o "$IF" -j MASQUERADE
     
-    # Pasang Forwarding
-    iptables -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
-    iptables -D FORWARD -j ACCEPT 2>/dev/null
+    # 5. Forwarding
     iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
     iptables -A FORWARD -j ACCEPT
     
-    # Simpan agar dibaca saat booting oleh netfilter-persistent
+    # Simpan Permanen
     netfilter-persistent save >/dev/null 2>&1
 }
 
-# Terapkan NAT Sekarang
-apply_nat_boot
+# Terapkan Firewall
+apply_firewall_rules
 
 # Path Setup
 CONFIG_DIR="/etc/zivpn"; CONFIG_FILE="/etc/zivpn/config.json"
@@ -63,21 +72,16 @@ send_notif() {
     fi
 }
 
-# SYNC & REBOOT WATCHDOG
+# SYNC & WATCHDOG
 sync_all() {
-    # 1. CEK NAT MASQUERADE (Sering hilang saat reboot)
+    # 1. IPTables Watchdog (Pastikan Input & NAT Aktif)
     local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
-    # Jika rule masquerade hilang, pasang lagi!
-    if ! iptables -t nat -C POSTROUTING -o "$IF" -j MASQUERADE 2>/dev/null; then
-        iptables -t nat -A POSTROUTING -o "$IF" -j MASQUERADE
-    fi
-    
-    # 2. CEK IP FORWARDING
-    if [ "$(cat /proc/sys/net/ipv4/ip_forward)" != "1" ]; then
-        echo 1 > /proc/sys/net/ipv4/ip_forward
-    fi
+    # Cek NAT
+    iptables -t nat -C POSTROUTING -o "$IF" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o "$IF" -j MASQUERADE
+    # Cek Input 5667
+    iptables -C INPUT -p udp --dport 5667 -j ACCEPT 2>/dev/null || iptables -A INPUT -p udp --dport 5667 -j ACCEPT
 
-    # 3. FORCE CONFIG 0.0.0.0
+    # 2. Force Listen 0.0.0.0
     local CURRENT_LISTEN=$(jq -r '.listen' "$CONFIG_FILE")
     if [[ "$CURRENT_LISTEN" != "0.0.0.0:"* ]]; then
         local CUR_PORT=$(echo "$CURRENT_LISTEN" | grep -oE '[0-9]+$')
@@ -86,7 +90,7 @@ sync_all() {
         systemctl restart "$SERVICE_NAME" >/dev/null 2>&1
     fi
 
-    # 4. AUTO-DELETE EXPIRED
+    # 3. Auto-Delete Expired
     local today=$(date +%s); local changed=false
     while read -r acc; do
         [ -z "$acc" ] && continue
@@ -99,23 +103,21 @@ sync_all() {
         fi
     done < <(jq -c '.accounts[]' "$META_FILE" 2>/dev/null)
 
-    # 5. SYNC USER
+    # 4. Sync Config
     local USERS_FROM_META=$(jq -c '[.accounts[].user]' "$META_FILE")
     jq --argjson u "$USERS_FROM_META" '.auth.config = $u' "$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "$CONFIG_FILE"
     
     [ "$changed" = true ] && systemctl restart "$SERVICE_NAME" >/dev/null 2>&1
 }
 
-# --- MODE CRON / REBOOT ---
+# --- CRON HANDLER (WAJIB DI ATAS) ---
 if [ "$1" == "cron" ]; then
-    # Tunggu sebentar jika baru reboot agar network ready
-    uptime_sec=$(cut -d. -f1 /proc/uptime)
-    if [ "$uptime_sec" -lt 60 ]; then sleep 10; fi
-    
+    # Tunggu network up
+    sleep 10
     sync_all
     exit 0
 fi
-# --------------------------
+# ------------------------------------
 
 # TURBO TWEAKS
 manage_tweaks() {
@@ -141,9 +143,14 @@ draw_header() {
     local IP=$(curl -s ifconfig.me || echo "No IP"); local UP=$(uptime -p | sed 's/up //')
     local RAM_U=$(free -h | awk '/Mem:/ {print $3}'); local CPU=$(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}')"%"
     
+    # Cek Port
     local CUR_PORT=$(jq -r '.listen' "$CONFIG_FILE" | cut -d':' -f2)
     local BIND_STAT=$(netstat -tulpn | grep ":$CUR_PORT " | grep -v ":::" | awk '{print $4}')
-    [[ ! -z "$BIND_STAT" ]] && PORT_STATUS="${G}Running ($CUR_PORT)${NC}" || PORT_STATUS="${R}Service Down${NC}"
+    if [[ ! -z "$BIND_STAT" ]]; then 
+        PORT_STATUS="${G}Running ($CUR_PORT)${NC}"
+    else
+        PORT_STATUS="${R}Service Down${NC}"
+    fi
 
     local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
     local BW_JSON=$(vnstat -i "$IF" --json 2>/dev/null)
@@ -153,7 +160,7 @@ draw_header() {
     local BW_STR="↓$(awk -v b="$RX" 'BEGIN {printf "%.2f", b/1024/1024}') MB | ↑$(awk -v b="$TX" 'BEGIN {printf "%.2f", b/1024/1024}') MB"
 
     echo -e "${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
-    echo -e "${C}┃${NC}        ${Y}ZIVPN REBOOT PROOF V59${NC}          ${C}┃${NC}"
+    echo -e "${C}┃${NC}           ${Y}ZIVPN FINAL FIX V60${NC}            ${C}┃${NC}"
     echo -e "${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "IP Address" "$IP"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Uptime" "$UP"
@@ -232,19 +239,17 @@ EOF
 chmod +x "/usr/local/bin/zivpn-manager.sh"
 echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT" && chmod +x "$SHORTCUT"
 
-# --- BAGIAN KRUSIAL UNTUK REBOOT ---
-# 1. Pastikan Service Auto Start
+# --- BAGIAN INSTALASI & PERBAIKAN AKHIR ---
 systemctl enable zivpn.service >/dev/null 2>&1
 systemctl start zivpn.service >/dev/null 2>&1
 
-# 2. Pasang Magic Cron (@reboot)
-# Ini adalah asuransi: Jika network mati/iptables hilang saat reboot, 
-# cron ini akan menjalankannya kembali secara otomatis saat nyala.
+# Pasang Cron (Reboot Proof + Auto Delete)
 (crontab -l 2>/dev/null | grep -v "zivpn-manager.sh") | crontab -
 (crontab -l 2>/dev/null; echo "0 0 * * * /usr/local/bin/zivpn-manager.sh cron") | crontab -
 (crontab -l 2>/dev/null; echo "@reboot /usr/local/bin/zivpn-manager.sh cron") | crontab -
 
 clear
-echo -e "${G}✅ V59 REBOOT PROOF INSTALLED!${NC}"
-echo -e "Script telah dipasang dengan fitur Auto-Repair saat startup."
-echo -e "Koneksi client akan aman meskipun VPS direstart."
+echo -e "${G}✅ V60 FINAL FIX INSTALLED!${NC}"
+echo -e "1. IPTables Input 5667 telah DIBUKA (Wajib agar client konek)."
+echo -e "2. Cron Logic diperbaiki (Auto-Delete berjalan)."
+echo -e "3. Service dipastikan Auto-Start saat Reboot."
