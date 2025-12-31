@@ -57,4 +57,4 @@ echo "✅ SEMUA INSTALASI SELESAI!"
 echo "✅ Membuka ZIVPN Manager..."
 echo "===================================="
 sleep 2
-zivpn
+menu
