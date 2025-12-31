@@ -32,6 +32,27 @@ SERVICE_NAME="zivpn.service"
 # Warna
 C='\e[1;36m'; G='\e[1;32m'; Y='\e[1;33m'; R='\e[1;31m'; P='\e[1;35m'; B='\e[1;34m'; NC='\e[0m'
 
+# --- FUNGSI RESTORE ---
+restore_data() {
+    clear
+    echo -e "\${C}┏━━━━━━━━━━━━━━━━━\${Y} RESTORE DATA \${C}━━━━━━━━━━━━━━━━━┓\${NC}"
+    echo -e " 1. Letakkan file backup (config.json) di folder /root/"
+    echo -e " 2. Pastikan nama filenya adalah \${Y}config.json\${NC}"
+    echo -e " 3. Jalankan restore ini."
+    echo -e "\${C}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\${NC}"
+    echo -ne " Lanjutkan restore? (y/n): " && read confirm
+    if [[ "\$confirm" == "y" ]]; then
+        if [ -f "/root/config.json" ]; then
+            cp /root/config.json "\$CONFIG_FILE"
+            systemctl restart "\$SERVICE_NAME" 2>/dev/null
+            echo -e "\${G}✅ Restore Berhasil! Akun telah dipulihkan.\${NC}"
+        else
+            echo -e "\${R}❌ File /root/config.json tidak ditemukan!\${NC}"
+        fi
+    fi
+    sleep 2
+}
+
 # --- FUNGSI CORE ---
 send_tg() {
     if [ ! -z "\$TG_BOT_TOKEN" ] && [ ! -z "\$TG_CHAT_ID" ]; then
@@ -62,7 +83,7 @@ auto_remove_expired() {
         if [ \$? -eq 0 ] && [ "\$today" -ge "\$exp_ts" ]; then
             jq --arg u "\$user" '.auth.config |= map(select(. != \$u))' "\$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "\$CONFIG_FILE"
             jq --arg u "\$user" '.accounts |= map(select(.user != \$u))' "\$META_FILE" > /tmp/meta.tmp && mv /tmp/meta.tmp "\$META_FILE"
-            send_tg "<b>⚠️ EXPIRED:</b> Akun <code>\$user</code> telah dihapus otomatis."
+            send_tg "<b>⚠️ EXPIRED:</b> Akun <code>\$user</code> dihapus otomatis."
             changed=true
         fi
     done < <(jq -c '.accounts[]' "\$META_FILE" 2>/dev/null)
@@ -79,26 +100,6 @@ convert_bw() {
     fi
 }
 
-system_status() {
-    clear
-    local OS_NAME=\$(grep -P '^PRETTY_NAME' /etc/os-release | cut -d'"' -f2)
-    local CPU_USAGE=\$(top -bn1 | grep "Cpu(s)" | awk '{print \$2 + \$4}')
-    local MEM_TOTAL=\$(free -h | awk '/Mem:/ {print \$2}')
-    local MEM_USED=\$(free -h | awk '/Mem:/ {print \$3}')
-    local DISK_USED=\$(df -h / | awk '/\// {print \$3}' | tail -n 1)
-    local UPTIME=\$(uptime -p | sed 's/up //')
-
-    echo -e "\${C}┏━━━━━━━━━━━━━\${Y} SYSTEM INFORMATION \${C}━━━━━━━━━━━━━┓\${NC}"
-    printf " \${C}┃\${NC} %-15s : %-23s \${C}┃\${NC}\n" "OS" "\$OS_NAME"
-    printf " \${C}┃\${NC} %-15s : %-23s \${C}┃\${NC}\n" "Uptime" "\$UPTIME"
-    printf " \${C}┃\${NC} %-15s : %-23s \${C}┃\${NC}\n" "CPU Load" "\$CPU_USAGE %"
-    printf " \${C}┃\${NC} %-15s : %-23s \${C}┃\${NC}\n" "RAM" "\$MEM_USED / \$MEM_TOTAL"
-    printf " \${C}┃\${NC} %-15s : %-23s \${C}┃\${NC}\n" "Disk Used" "\$DISK_USED"
-    echo -e "\${C}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\${NC}"
-    echo ""
-    read -rp " Tekan [Enter] untuk kembali..."
-}
-
 draw_header() {
     clear
     VPS_IP=\$(curl -s ifconfig.me)
@@ -109,7 +110,7 @@ draw_header() {
     BW_U_RAW=\$(echo "\$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == \$T_Y and .date.month == \$T_M and .date.day == \$T_D) | .tx // 0" 2>/dev/null)
     
     echo -e "\${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\${NC}"
-    echo -e "\${C}┃\${NC} \${P}⚡\${NC} \${Y}ZIVPN FINAL PANEL\${NC}      \${C}┃\${NC} \${B}IP:\${NC} \${G}\$VPS_IP\${NC}"
+    echo -e "\${C}┃\${NC} \${P}⚡\${NC} \${Y}ZIVPN FULL PANEL\${NC}      \${C}┃\${NC} \${B}IP:\${NC} \${G}\$VPS_IP\${NC}"
     echo -e "\${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\${NC}"
     echo -e "\${C}┃\${NC} \${B}Traffic Hari Ini:\${NC} \${G}↓\$(convert_bw "\${BW_D_RAW:-0}")\${NC} | \${R}↑\$(convert_bw "\${BW_U_RAW:-0}")\${NC}"
     echo -e "\${C}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\${NC}"
@@ -121,23 +122,24 @@ case "\$1" in
     *)
     while true; do
         sync_accounts; auto_remove_expired; draw_header
-        echo -e "  \${C}[\${Y}01\${C}]\${NC} Tambah Akun Baru      \${C}[\${Y}05\${C}]\${NC} Status System"
-        echo -e "  \${C}[\${Y}02\${C}]\${NC} Hapus Akun            \${C}[\${Y}06\${C}]\${NC} Backup Akun (.json)"
-        echo -e "  \${C}[\${Y}03\${C}]\${NC} Lihat Daftar Akun     \${C}[\${Y}07\${C}]\${NC} \${P}Settings Telegram\${NC}"
-        echo -e "  \${C}[\${Y}04\${C}]\${NC} Restart Service       \${C}[\${Y}08\${C}]\${NC} Update Script"
-        echo -e "  \${C}[\${Y}00\${C}]\${NC} Keluar"
+        echo -e "  \${C}[\${Y}01\${C}]\${NC} Tambah Akun           \${C}[\${Y}06\${C}]\${NC} Backup Telegram"
+        echo -e "  \${C}[\${Y}02\${C}]\${NC} Hapus Akun            \${C}[\${Y}07\${C}]\${NC} Restore Akun Local"
+        echo -e "  \${C}[\${Y}03\${C}]\${NC} Lihat Daftar Akun     \${C}[\${Y}08\${C}]\${NC} Settings Telegram"
+        echo -e "  \${C}[\${Y}04\${C}]\${NC} Restart Service       \${C}[\${Y}09\${C}]\${NC} Update Script"
+        echo -e "  \${C}[\${Y}05\${C}]\${NC} Status System         \${C}[\${Y}00\${C}]\${NC} Keluar"
         echo -e "\${C}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
-        echo -ne "  \${B}Pilih menu\${NC} [01-08]: " && read choice
+        echo -ne "  \${B}Pilih menu\${NC} [01-09]: " && read choice
 
         case \$choice in
             1|01) read -rp "  User: " n; read -rp "  Hari: " d; exp=\$(date -d "+\$d days" +%Y-%m-%d); jq --arg u "\$n" '.auth.config += [\$u]' "\$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "\$CONFIG_FILE"; jq --arg u "\$n" --arg e "\$exp" '.accounts += [{"user":\$u,"expired":\$e}]' "\$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "\$META_FILE"; systemctl restart "\$SERVICE_NAME" 2>/dev/null; send_tg "✅ Baru: \$n (Exp: \$exp)"; echo -e "\${G}Berhasil!\${NC}"; sleep 1 ;;
             2|02) read -rp "  User dihapus: " d; jq --arg u "\$d" '.auth.config |= map(select(. != \$u))' "\$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "\$CONFIG_FILE"; jq --arg u "\$d" '.accounts |= map(select(.user != \$u))' "\$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "\$META_FILE"; systemctl restart "\$SERVICE_NAME" 2>/dev/null; echo -e "\${R}Dihapus.\${NC}"; sleep 1 ;;
-            3|03) clear; printf "\${Y}%-18s %-12s %-10s\${NC}\n" "USER" "EXP" "STATUS"; echo "---------------------------------------"; jq -r '.accounts[] | "\(.user) \(.expired)"' "\$META_FILE" | while read -r u e; do t=\$(date +%s); x=\$(date -d "\$e" +%s); s="Aktif"; [ "\$t" -ge "\$x" ] && s="Exp"; printf "%-18s %-12s %-10s\n" "\$u" "\$e" "\$s"; done; read -rp "Enter..." ;;
+            3|03) clear; printf "\${Y}%-18s %-12s\${NC}\n" "USER" "EXPIRED"; echo "------------------------------"; jq -r '.accounts[] | "\(.user) \(.expired)"' "\$META_FILE" | while read -r u e; do printf "%-18s %-12s\n" "\$u" "\$e"; done; read -rp "Enter..." ;;
             4|04) systemctl restart "\$SERVICE_NAME" 2>/dev/null; echo "Restarted."; sleep 1 ;;
-            5|05) system_status ;;
-            6|06) if [ -z "\$TG_BOT_TOKEN" ]; then echo -e "\${R}Lakukan Menu 07 Terlebih Dahulu!\${NC}"; sleep 2; else cp "\$CONFIG_FILE" /tmp/c.json; curl -s -F chat_id="\$TG_CHAT_ID" -F document=@/tmp/c.json https://api.telegram.org/bot\$TG_BOT_TOKEN/sendDocument > /dev/null; echo "Backup dikirim ke Telegram!"; sleep 1; fi ;;
-            7|07) clear; echo -e "\${C}Setup Telegram Bot\${NC}"; echo -ne "Token: " && read NEW_TOKEN; echo -ne "Chat ID: " && read NEW_ID; echo "TG_BOT_TOKEN=\"\$NEW_TOKEN\"" > "$TG_CONF"; echo "TG_CHAT_ID=\"\$NEW_ID\"" >> "$TG_CONF"; source "$TG_CONF"; echo "Tersimpan!"; sleep 1 ;;
-            8|08) wget -q -O /tmp/z.sh "\$GITHUB_URL" && mv /tmp/z.sh "\$MANAGER_SCRIPT" && chmod +x "\$MANAGER_SCRIPT" && echo "Update Selesai!"; exit 0 ;;
+            5|05) clear; uptime; free -h; df -h /; read -rp "Enter..." ;;
+            6|06) if [ -z "\$TG_BOT_TOKEN" ]; then echo -e "\${R}Setup Telegram dulu (Menu 08)!\${NC}"; sleep 2; else cp "\$CONFIG_FILE" /tmp/c.json; curl -s -F chat_id="\$TG_CHAT_ID" -F document=@/tmp/c.json https://api.telegram.org/bot\$TG_BOT_TOKEN/sendDocument > /dev/null; echo "Sent!"; sleep 1; fi ;;
+            7|07) restore_data ;;
+            8|08) clear; echo -ne "Token: " && read NT; echo -ne "ID: " && read NI; echo "TG_BOT_TOKEN=\"\$NT\"" > "$TG_CONF"; echo "TG_CHAT_ID=\"\$NI\"" >> "$TG_CONF"; source "$TG_CONF"; echo "Saved!"; sleep 1 ;;
+            9|09) wget -q -O /tmp/z.sh "\$GITHUB_URL" && mv /tmp/z.sh "\$MANAGER_SCRIPT" && chmod +x "\$MANAGER_SCRIPT" && echo "Updated!"; exit 0 ;;
             0|00) exit 0 ;;
         esac
     done
@@ -145,25 +147,13 @@ case "\$1" in
 esac
 EOF
 
-# --- FINALISASI SYSTEM ---
+# --- FINALISASI ---
 chmod +x "$MANAGER_SCRIPT"
 echo "sudo bash $MANAGER_SCRIPT" > "$SHORTCUT"
 chmod +x "$SHORTCUT"
-
-# Cron Job (Setiap jam 00:00)
 (crontab -l 2>/dev/null | grep -v "$MANAGER_SCRIPT cron") | crontab -
 (crontab -l 2>/dev/null; echo "0 0 * * * $MANAGER_SCRIPT cron") | crontab -
 
-# Kernel Tuning (UDP Optimization)
-cat <<EOF > /etc/sysctl.d/99-zivpn.conf
-net.ipv4.ip_forward = 1
-net.core.rmem_max = 16777216
-net.core.wmem_max = 16777216
-net.ipv4.udp_rmem_min = 16384
-net.ipv4.udp_wmem_min = 16384
-EOF
-sysctl --system > /dev/null
-
 clear
-echo -e "${GREEN}✅ ZIVPN MANAGER V13 SELESAI DIINSTALL!${NC}"
-echo -e "Gunakan perintah ${YELLOW}'menu'${NC} untuk mengelola."
+echo -e "${GREEN}✅ ZIVPN MANAGER V14 INSTALLED!${NC}"
+echo -e "Ketik ${YELLOW}'menu'${NC} untuk melihat fitur lengkap."
