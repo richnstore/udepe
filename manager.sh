@@ -1,10 +1,9 @@
 #!/bin/bash
 
 # --- 1. PRE-INSTALLATION ---
-# Memastikan vnstat terinstall untuk fitur Daily BW
 apt-get update -qq && apt-get install iptables iptables-persistent jq vnstat curl wget sudo lsb-release zip unzip -y -qq
 
-# Config IP Forwarding (Wajib)
+# IP Forwarding (Core)
 echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/00-zivpn-core.conf
 sysctl -p /etc/sysctl.d/00-zivpn-core.conf >/dev/null 2>&1
 
@@ -41,7 +40,18 @@ SERVICE_NAME="zivpn.service"
 
 C='\e[1;36m'; G='\e[1;32m'; Y='\e[1;33m'; R='\e[1;31m'; B='\e[1;34m'; NC='\e[0m'
 
-# SYNC & WATCHDOG
+# --- FUNGSI NOTIFIKASI TELEGRAM ---
+send_notif() {
+    local msg="$1"
+    if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+        curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
+        -d chat_id="$TG_CHAT_ID" \
+        -d parse_mode="html" \
+        -d text="$msg" >/dev/null 2>&1 &
+    fi
+}
+
+# --- SYNC & AUTO DELETE ---
 sync_all() {
     [ "$(sysctl -n net.ipv4.ip_forward)" != "1" ] && sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
     local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
@@ -52,8 +62,12 @@ sync_all() {
         [ -z "$acc" ] && continue
         local user=$(echo "$acc" | jq -r '.user'); local exp=$(echo "$acc" | jq -r '.expired')
         local exp_ts=$(date -d "$exp" +%s 2>/dev/null)
+        
+        # Cek Expired
         if [ $? -eq 0 ] && [ "$today" -ge "$exp_ts" ]; then
             jq --arg u "$user" '.accounts |= map(select(.user != $u))' "$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "$META_FILE"
+            # Kirim Notif Expired
+            send_notif "🚫 <b>ACCOUNT EXPIRED</b>%0AUser: <code>$user</code>%0ADate: $exp%0AStatus: <i>Auto-Deleted by System</i>"
             changed=true
         fi
     done < <(jq -c '.accounts[]' "$META_FILE" 2>/dev/null)
@@ -64,7 +78,7 @@ sync_all() {
     [ "$changed" = true ] && systemctl restart "$SERVICE_NAME" >/dev/null 2>&1
 }
 
-# MANAJEMEN TWEAK (MENU 08)
+# MANAJEMEN TWEAK
 manage_tweaks() {
     if [ "$1" == "on" ]; then
         cat <<EOT > "$TWEAK_FILE"
@@ -94,35 +108,28 @@ draw_header() {
     local IP=$(curl -s ifconfig.me || echo "No IP"); local UP=$(uptime -p | sed 's/up //')
     local RAM_U=$(free -h | awk '/Mem:/ {print $3}'); local CPU=$(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}')"%"
     
-    # Hitung Bandwidth Harian (vnstat)
+    # Bandwidth Stats
     local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
     local T_D=$(date +%-d); local T_M=$(date +%-m); local T_Y=$(date +%Y)
     local BW_JSON=$(vnstat -i "$IF" --json 2>/dev/null)
-    local RX=$(echo "$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == $T_Y and .date.month == $T_M and .date.day == $T_D) | .rx" 2>/dev/null)
-    local TX=$(echo "$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == $T_Y and .date.month == $T_M and .date.day == $T_D) | .tx" 2>/dev/null)
-    # Fallback jika null
-    [[ "$RX" == "null" || -z "$RX" ]] && RX=0
-    [[ "$TX" == "null" || -z "$TX" ]] && TX=0
-    # Convert ke MB
+    local RX=$(echo "$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == $T_Y and .date.month == $T_M and .date.day == $T_D) | .rx // 0" 2>/dev/null)
+    local TX=$(echo "$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == $T_Y and .date.month == $T_M and .date.day == $T_D) | .tx // 0" 2>/dev/null)
     local RX_MB=$(awk -v b="$RX" 'BEGIN {printf "%.2f", b/1024/1024}')
     local TX_MB=$(awk -v b="$TX" 'BEGIN {printf "%.2f", b/1024/1024}')
     local BW_STR="↓$RX_MB MB | ↑$TX_MB MB"
 
     echo -e "${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
-    echo -e "${C}┃${NC}       ${Y}ZIVPN DASHBOARD V49 (BW+UI)${NC}        ${C}┃${NC}"
+    echo -e "${C}┃${NC}      ${Y}ZIVPN NOTIFICATION V50${NC}        ${C}┃${NC}"
     echo -e "${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "IP Address" "$IP"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Uptime" "$UP"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "CPU | RAM" "$CPU | $RAM_U"
     
-    # Perbaikan UI Turbo Tweak (Handling Warna)
     if [ -f "$TWEAK_FILE" ]; then 
         printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Turbo Tweak" "[ON] Active"
     else 
         printf " ${C}┃${NC} %-12s : ${R}%-26s${NC} ${C}┃${NC}\n" "Turbo Tweak" "[OFF] Default"
     fi
-
-    # Tampilan Daily BW
     printf " ${C}┃${NC} %-12s : ${Y}%-26s${NC} ${C}┃${NC}\n" "Daily BW" "$BW_STR"
     echo -e "${C}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}"
 }
@@ -145,7 +152,11 @@ while true; do
             exp=$(date -d "+$d days" +%Y-%m-%d)
             jq --arg u "$n" --arg e "$exp" '.accounts += [{"user":$u,"expired":$e}]' "$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "$META_FILE"
             sync_all; systemctl restart "$SERVICE_NAME"
+            
+            # NOTIF CREATE
+            send_notif "✅ <b>NEW USER CREATED</b>%0AUser: <code>$n</code>%0AExpired: $exp%0ADuration: ${d} Days"
             echo -e "  ${G}Sukses: User $n Aktif.${NC}"; sleep 2 ;;
+            
         2|02) 
             mapfile -t LIST < <(jq -r '.accounts[].user' "$META_FILE")
             [ ${#LIST[@]} -eq 0 ] && { echo -e "  ${R}Kosong.${NC}"; sleep 2; continue; }
@@ -159,7 +170,11 @@ while true; do
             target=${LIST[$((idx-1))]}
             jq --arg u "$target" '.accounts |= map(select(.user != $u))' "$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "$META_FILE"
             sync_all; systemctl restart "$SERVICE_NAME"
+            
+            # NOTIF DELETE
+            send_notif "❌ <b>USER DELETED</b>%0AUser: <code>$target</code>%0ABy: Admin Panel"
             echo -e "  ${G}Dihapus: $target${NC}"; sleep 2 ;;
+            
         3|03) 
             echo -e "\n  ${Y}DAFTAR AKUN ZIVPN:${NC}"
             printf "  %-15s %-12s\n" "USER" "EXPIRED"
@@ -171,14 +186,14 @@ while true; do
             echo -ne "  Restarting..."; systemctl restart "$SERVICE_NAME"
             echo -e " ${G}OK!${NC}"; sleep 1 ;;
         5|05) 
-            if [ -z "$TG_BOT_TOKEN" ]; then echo -e "  ${R}Set Telegram dulu di menu 07.${NC}"; sleep 2; continue; fi
+            if [ -z "$TG_BOT_TOKEN" ]; then echo -e "  ${R}Set Telegram dulu (07).${NC}"; sleep 2; continue; fi
             echo -ne "  Zipping..."; ZIP="/tmp/zivpn_backup.zip"
             zip -j "$ZIP" "$CONFIG_FILE" "$META_FILE" >/dev/null
-            RES=$(curl -s -F chat_id="$TG_CHAT_ID" -F document=@"$ZIP" "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument")
+            RES=$(curl -s -F chat_id="$TG_CHAT_ID" -F document=@"$ZIP" -F caption="Backup ZIVPN $(date)" "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument")
             [[ "$RES" == *"ok\":true"* ]] && echo -e " ${G}Terkirim!${NC}" || echo -e " ${R}Gagal!${NC}"
             rm -f "$ZIP"; sleep 2 ;;
         6|06) 
-            if [ -z "$TG_BOT_TOKEN" ]; then echo -e "  ${R}Set Telegram dulu di menu 07.${NC}"; sleep 2; continue; fi
+            if [ -z "$TG_BOT_TOKEN" ]; then echo -e "  ${R}Set Telegram dulu (07).${NC}"; sleep 2; continue; fi
             echo -e "  ${Y}Cek file terbaru...${NC}"
             JSON_DATA=$(curl -s "https://api.telegram.org/bot$TG_BOT_TOKEN/getUpdates?limit=100")
             FID=$(echo "$JSON_DATA" | jq -r '.result | reverse | .[] | select(.message.document != null) | .message.document.file_id' | head -n 1)
@@ -189,6 +204,7 @@ while true; do
                     systemctl stop "$SERVICE_NAME"
                     unzip -o /tmp/restore.zip -d /etc/zivpn/ >/dev/null
                     sync_all; systemctl start "$SERVICE_NAME"
+                    send_notif "⚠️ <b>SYSTEM RESTORED</b>%0ADatabase has been restored via Telegram."
                     echo -e "  ${G}Restore Berhasil!${NC}"; rm -f /tmp/restore.zip
                 else echo -e "  ${R}Download gagal.${NC}"; fi
             fi; sleep 2 ;;
@@ -201,6 +217,7 @@ while true; do
                     1) echo -e "\n Token: ${TG_BOT_TOKEN}\n ID: ${TG_CHAT_ID}"; read -rp " Enter..." ;;
                     2) echo -ne " Token: " && read NT; echo -ne " ID: " && read NI
                        [ -n "$NT" ] && [ -n "$NI" ] && echo "TG_BOT_TOKEN=\"$NT\"" > "$TG_CONF" && echo "TG_CHAT_ID=\"$NI\"" >> "$TG_CONF" && echo -e " ${G}Saved!${NC}"
+                       send_notif "✅ <b>BOT CONNECTED</b>%0AZIVPN Manager is now connected."
                        sleep 1; break ;;
                     0) break ;;
                 esac
@@ -232,12 +249,12 @@ while true; do
 done
 EOF
 
-# --- 3. FINAL INSTALLATION ---
+# --- 3. FINAL SETUP ---
 chmod +x "/usr/local/bin/zivpn-manager.sh"
 echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT" && chmod +x "$SHORTCUT"
 (crontab -l 2>/dev/null | grep -v "zivpn-manager.sh") | crontab -
 (crontab -l 2>/dev/null; echo "0 0 * * * /usr/local/bin/zivpn-manager.sh cron") | crontab -
 
 clear
-echo -e "${G}✅ V49 UI POLISH + BANDWIDTH INSTALLED!${NC}"
-echo -e "Tampilan Turbo Tweak sudah rapi & Daily Bandwidth telah ditambahkan."
+echo -e "${G}✅ V50 NOTIFICATION EDITION INSTALLED!${NC}"
+echo -e "Pastikan Token Bot & Chat ID sudah diisi di Menu 07 agar notifikasi berjalan."
