@@ -8,7 +8,7 @@ echo "=========================================="
 echo ""
 
 # URL GitHub kamu untuk Update
-GITHUB_RAW_URL="https://raw.githubusercontent.com/username/repo/main/zivpn-manager.sh"
+GITHUB_RAW_URL="https://raw.githubusercontent.com/richnstore/udepe/main/manager.sh"
 
 # Input Telegram (Looping jika kosong)
 while true; do
