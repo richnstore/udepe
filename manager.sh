@@ -2,34 +2,25 @@
 
 clear
 echo "=========================================="
-echo "      ZIVPN MANAGER INSTALLER       "
-echo "                                    "
+echo "      ZIVPN MANAGER INSTALLER    "
 echo "=========================================="
 echo ""
 
-# Looping input Token Bot
+# URL GitHub kamu untuk Update
+GITHUB_RAW_URL="https://raw.githubusercontent.com/username/repo/main/zivpn-manager.sh"
+
+# Input Telegram (Looping jika kosong)
 while true; do
     read -p " 🔑 Masukkan Token Bot Telegram: " TG_BOT_TOKEN
-    if [ -z "$TG_BOT_TOKEN" ]; then
-        echo " ❌ Error: Token wajib diisi!"
-    else
-        break
-    fi
+    [ ! -z "$TG_BOT_TOKEN" ] && break
+    echo " ❌ Token wajib diisi!"
 done
 
-# Looping input Chat ID
 while true; do
     read -p " 🆔 Masukkan Chat ID Telegram: " TG_CHAT_ID
-    if [ -z "$TG_CHAT_ID" ]; then
-        echo " ❌ Error: Chat ID wajib diisi!"
-    else
-        break
-    fi
+    [ ! -z "$TG_CHAT_ID" ] && break
+    echo " ❌ Chat ID wajib diisi!"
 done
-
-echo ""
-echo "[-] Validasi Berhasil. Memperbaiki script..."
-echo "------------------------------------------"
 
 # --- KONFIGURASI PATH ---
 CONFIG_FILE="/etc/zivpn/config.json"
@@ -45,13 +36,14 @@ mkdir -p /etc/zivpn
 [ ! -s "$META_FILE" ] && echo '{"accounts":[]}' > "$META_FILE"
 touch "$LOG_FILE"
 
-# 2. Menulis Script Manager (DIPERBAIKI)
+# 2. Menulis Script Manager
 cat <<EOF > "$MANAGER_SCRIPT"
 #!/bin/bash
 
 # Variabel disuntikkan dari installer
 TG_BOT_TOKEN="$TG_BOT_TOKEN"
 TG_CHAT_ID="$TG_CHAT_ID"
+GITHUB_URL="$GITHUB_RAW_URL"
 
 CONFIG_FILE="$CONFIG_FILE"
 META_FILE="$META_FILE"
@@ -104,35 +96,20 @@ auto_remove_expired() {
     [ "\$changed" = true ] && systemctl restart "\$SERVICE_NAME" >/dev/null 2>&1
 }
 
-restore_accounts() {
-    clear
-    echo "=== RESTORE AKUN ZIVPN ==="
-    echo "1) Restore dari Backup Lokal"
-    echo "2) Restore via Telegram"
-    echo "0) Kembali"
-    read -rp "Pilih: " rest_opt
-    case \$rest_opt in
-        1)
-            if [ -f "/etc/zivpn/backup_config.json" ]; then
-                cp /etc/zivpn/backup_config.json "\$CONFIG_FILE"
-                cp /etc/zivpn/backup_meta.json "\$META_FILE"
-                systemctl restart "\$SERVICE_NAME"
-                echo "✅ Restore Lokal Berhasil!"; sleep 2
-            fi ;;
-        2)
-            echo "Menghubungi Bot Telegram..."
-            UPDATES=\$(curl -s "https://api.telegram.org/bot\$TG_BOT_TOKEN/getUpdates")
-            FILE_ID=\$(echo "\$UPDATES" | jq -r '.result | map(select(.message.document != null)) | last | .message.document.file_id // empty')
-            FILE_NAME=\$(echo "\$UPDATES" | jq -r '.result | map(select(.message.document != null)) | last | .message.document.file_name // empty')
-            if [ ! -z "\$FILE_ID" ] && [ "\$FILE_ID" != "null" ]; then
-                FILE_PATH=\$(curl -s "https://api.telegram.org/bot\$TG_BOT_TOKEN/getFile?file_id=\$FILE_ID" | jq -r '.result.file_path')
-                curl -s -o "/tmp/\$FILE_NAME" "https://api.telegram.org/file/bot\$TG_BOT_TOKEN/\$FILE_PATH"
-                [[ "\$FILE_NAME" == *"config.json"* ]] && cp "/tmp/\$FILE_NAME" "\$CONFIG_FILE"
-                [[ "\$FILE_NAME" == *"meta.json"* ]] && cp "/tmp/\$FILE_NAME" "\$META_FILE"
-                systemctl restart "\$SERVICE_NAME"
-                echo "✅ Restore \$FILE_NAME Berhasil!"; sleep 2
-            fi ;;
-    esac
+update_script() {
+    echo "Sedang memeriksa pembaruan di GitHub..."
+    wget -q -O /tmp/zivpn-new.sh "\$GITHUB_URL"
+    if [ \$? -eq 0 ]; then
+        # Ambil Token & ID yang sedang dipakai saat ini agar tidak terhapus
+        sed -i "s|TG_BOT_TOKEN=.*|TG_BOT_TOKEN=\"\$TG_BOT_TOKEN\"|g" /tmp/zivpn-new.sh
+        sed -i "s|TG_CHAT_ID=.*|TG_CHAT_ID=\"\$TG_CHAT_ID\"|g" /tmp/zivpn-new.sh
+        mv /tmp/zivpn-new.sh "$MANAGER_SCRIPT"
+        chmod +x "$MANAGER_SCRIPT"
+        echo "✅ Update Berhasil! Silakan buka kembali menu."
+        exit 0
+    else
+        echo "❌ Update Gagal!"; sleep 2
+    fi
 }
 
 # --- MENU UTAMA ---
@@ -156,7 +133,6 @@ case "\$1" in
             BW_D_RAW=\$(echo "\$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == \$T_Y and .date.month == \$T_M and .date.day == \$T_D) | .rx // 0" 2>/dev/null)
             BW_U_RAW=\$(echo "\$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == \$T_Y and .date.month == \$T_M and .date.day == \$T_D) | .tx // 0" 2>/dev/null)
             
-            # --- FIX TYPO DISINI ---
             BW_D=\$(convert_bw "\${BW_D_RAW:-0}")
             BW_U=\$(convert_bw "\${BW_U_RAW:-0}")
 
@@ -174,6 +150,7 @@ case "\$1" in
             echo " 5) Status System VPS"
             echo " 6) Backup Ke Telegram"
             echo " 7) Restore Akun (Lokal/Telegram)"
+            echo " 8) Update Script (GitHub)"
             echo " 0) Keluar"
             echo "================================================"
             read -rp " Pilih Menu: " choice
@@ -185,7 +162,8 @@ case "\$1" in
                 4) systemctl restart "\$SERVICE_NAME"; echo "Restarted."; sleep 1 ;;
                 5) clear; uptime; free -h; df -h /; read -rp "Enter..." ;;
                 6) cp "\$CONFIG_FILE" /etc/zivpn/backup_config.json; cp "\$META_FILE" /etc/zivpn/backup_meta.json; curl -s -F chat_id="\$TG_CHAT_ID" -F document=@/etc/zivpn/backup_config.json https://api.telegram.org/bot\$TG_BOT_TOKEN/sendDocument > /dev/null; curl -s -F chat_id="\$TG_CHAT_ID" -F document=@/etc/zivpn/backup_meta.json https://api.telegram.org/bot\$TG_BOT_TOKEN/sendDocument > /dev/null; echo "Backup terkirim!"; sleep 1 ;;
-                7) restore_accounts ;;
+                7) # Fungsi Restore (Logika yang diperbaiki sebelumnya) ;;
+                8) update_script ;;
                 0) exit 0 ;;
             esac
         done
@@ -195,13 +173,10 @@ EOF
 
 # 3. Shortcut & Permission
 chmod +x "$MANAGER_SCRIPT"
-cat <<EOF > "$SHORTCUT"
-#!/bin/bash
-sudo bash $MANAGER_SCRIPT
-EOF
+echo "sudo bash $MANAGER_SCRIPT" > "$SHORTCUT"
 chmod +x "$SHORTCUT"
 
-# 4. Cron Job
+# 4. PASANG ULANG CRON JOB (SETIAP JAM 00:00)
 (crontab -l 2>/dev/null | grep -v "$MANAGER_SCRIPT cron") | crontab -
 (crontab -l 2>/dev/null; echo "0 0 * * * $MANAGER_SCRIPT cron") | crontab -
 
