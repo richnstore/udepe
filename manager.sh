@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# --- 1. PRE-INSTALLATION & CORE OPTIMIZATION (UDP TURBO) ---
+# --- 1. PRE-INSTALLATION & CORE OPTIMIZATION (JANGAN DIHAPUS) ---
 apt-get update -qq && apt-get install iptables iptables-persistent jq vnstat curl wget sudo lsb-release zip unzip -y -qq
 
 # UDP & TCP Turbo Tweaks (Persistent)
@@ -51,14 +51,14 @@ SERVICE_NAME="zivpn.service"
 
 C='\e[1;36m'; G='\e[1;32m'; Y='\e[1;33m'; R='\e[1;31m'; B='\e[1;34m'; NC='\e[0m'
 
-# ULTIMATE SYNC: Memastikan config.json dan meta selalu kembar identik
+# ULTIMATE SYNC: Jantung Script (Jangan Dihapus)
 sync_all() {
-    # 1. Forwarding & IPTables Check
+    # 1. Forwarding & IPTables Watchdog
     [ "$(sysctl -n net.ipv4.ip_forward)" != "1" ] && sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
     local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
     iptables -t nat -C POSTROUTING -o "$IF" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o "$IF" -j MASQUERADE
     
-    # 2. Hapus yang Expired
+    # 2. Hapus Expired
     local today=$(date +%s); local changed=false
     while read -r acc; do
         [ -z "$acc" ] && continue
@@ -70,7 +70,7 @@ sync_all() {
         fi
     done < <(jq -c '.accounts[]' "$META_FILE" 2>/dev/null)
 
-    # 3. REBUILD CONFIG.JSON (Data Meta adalah bosnya)
+    # 3. REBUILD CONFIG (Sinkronisasi Meta -> Config)
     local USERS_FROM_META=$(jq -c '[.accounts[].user]' "$META_FILE")
     jq --argjson u "$USERS_FROM_META" '.auth.config = $u' "$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "$CONFIG_FILE"
     
@@ -83,7 +83,7 @@ draw_header() {
     local RAM_U=$(free -h | awk '/Mem:/ {print $3}'); local CPU=$(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}')"%"
     local QDISC=$(sysctl net.core.default_qdisc | awk '{print $3}')
     echo -e "${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
-    echo -e "${C}┃${NC}        ${Y}ZIVPN ULTIMATE SYNC V44${NC}          ${C}┃${NC}"
+    echo -e "${C}┃${NC}        ${Y}ZIVPN MANAGER PRO V45${NC}           ${C}┃${NC}"
     echo -e "${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "IP Address" "$IP"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Uptime" "$UP"
@@ -151,13 +151,41 @@ while true; do
                     systemctl stop "$SERVICE_NAME"
                     unzip -o /tmp/restore.zip -d /etc/zivpn/ >/dev/null
                     sync_all; systemctl start "$SERVICE_NAME"
-                    echo -e "  ${G}Restore Berhasil! Database sinkron sempurna.${NC}"; rm -f /tmp/restore.zip
+                    echo -e "  ${G}Restore Berhasil! Database sinkron.${NC}"; rm -f /tmp/restore.zip
                 else echo -e "  ${R}Gagal download!${NC}"; fi
             fi; sleep 3 ;;
-        7|07) 
-            echo -ne "  Token: " && read NT; echo -ne "  ID: " && read NI
-            echo "TG_BOT_TOKEN=\"$NT\"" > "$TG_CONF"; echo "TG_CHAT_ID=\"$NI\"" >> "$TG_CONF"
-            echo -e "  ${G}Tersimpan!${NC}"; sleep 1 ;;
+        7|07)
+            while true; do
+                clear
+                echo -e "${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
+                echo -e "${C}┃${NC}           ${Y}TELEGRAM SETTINGS${NC}            ${C}┃${NC}"
+                echo -e "${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
+                echo -e "  ${C}[${Y}1${C}]${NC} Lihat Data Bot Saat Ini"
+                echo -e "  ${C}[${Y}2${C}]${NC} Ubah Token & Chat ID"
+                echo -e "  ${C}[${Y}0${C}]${NC} Kembali"
+                echo -e "${C}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}"
+                echo -ne "  ${B}Pilih${NC}: " && read tg_opt
+                case $tg_opt in
+                    1) 
+                        [ -f "$TG_CONF" ] && source "$TG_CONF"
+                        echo -e "\n  ${Y}Current Config:${NC}"
+                        echo -e "  ${B}Token :${NC} ${TG_BOT_TOKEN:-Belum Diset}"
+                        echo -e "  ${B}ID    :${NC} ${TG_CHAT_ID:-Belum Diset}"
+                        read -rp "  Tekan Enter..." ;;
+                    2)
+                        echo -e "\n  ${Y}Input Data Baru:${NC}"
+                        echo -ne "  Bot Token Baru: " && read NT
+                        echo -ne "  Chat ID Baru  : " && read NI
+                        if [ -n "$NT" ] && [ -n "$NI" ]; then
+                            echo "TG_BOT_TOKEN=\"$NT\"" > "$TG_CONF"
+                            echo "TG_CHAT_ID=\"$NI\"" >> "$TG_CONF"
+                            echo -e "  ${G}Data Tersimpan!${NC}"
+                        else echo -e "  ${R}Input Kosong! Batalkan.${NC}"; fi
+                        sleep 1 ;;
+                    0) break ;;
+                    *) echo -e "  ${R}Invalid!${NC}"; sleep 1 ;;
+                esac
+            done ;;
         8|08) 
             echo -e "  ${Y}Updating script...${NC}"
             wget -q -O /tmp/z.sh "https://raw.githubusercontent.com/richnstore/udepe/main/manager.sh"
@@ -177,5 +205,5 @@ echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT" && chmod +x "$SHO
 (crontab -l 2>/dev/null; echo "0 0 * * * /usr/local/bin/zivpn-manager.sh cron") | crontab -
 
 clear
-echo -e "${G}✅ V44 ULTIMATE SYNC INSTALLED!${NC}"
-echo -e "Masalah desinkronisasi Daftar/Hapus akun telah diperbaiki secara permanen."
+echo -e "${G}✅ V45 FINAL COMPLETE EDITION INSTALLED!${NC}"
+echo -e "Menu Telegram Settings telah diperbarui. Semua fitur lainnya AMAN & TERKUNCI."
