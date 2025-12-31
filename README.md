@@ -1,4 +1,4 @@
 ## Install
 ```
-sudo -s git clone https://github.com/richnstore/udepe && cd udp-custom && chmod +x install.sh && ./install.sh
+sudo -s git clone https://github.com/richnstore/udepe && cd udepe && chmod +x install.sh && ./install.sh
 ```
