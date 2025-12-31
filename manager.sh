@@ -2,7 +2,8 @@
 
 clear
 echo "=========================================="
-echo "      ZIVPN MANAGER INSTALLER     "
+echo "      ZIVPN MANAGER INSTALLER       "
+echo "                                    "
 echo "=========================================="
 echo ""
 
@@ -27,7 +28,7 @@ while true; do
 done
 
 echo ""
-echo "[-] Validasi Berhasil. Memulai instalasi..."
+echo "[-] Validasi Berhasil. Memperbaiki script..."
 echo "------------------------------------------"
 
 # --- KONFIGURASI PATH ---
@@ -44,7 +45,7 @@ mkdir -p /etc/zivpn
 [ ! -s "$META_FILE" ] && echo '{"accounts":[]}' > "$META_FILE"
 touch "$LOG_FILE"
 
-# 2. Menulis Script Manager
+# 2. Menulis Script Manager (DIPERBAIKI)
 cat <<EOF > "$MANAGER_SCRIPT"
 #!/bin/bash
 
@@ -155,8 +156,9 @@ case "\$1" in
             BW_D_RAW=\$(echo "\$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == \$T_Y and .date.month == \$T_M and .date.day == \$T_D) | .rx // 0" 2>/dev/null)
             BW_U_RAW=\$(echo "\$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == \$T_Y and .date.month == \$T_M and .date.day == \$T_D) | .tx // 0" 2>/dev/null)
             
+            # --- FIX TYPO DISINI ---
             BW_D=\$(convert_bw "\${BW_D_RAW:-0}")
-            BW_U=\house \$(convert_bw "\${BW_U_RAW:-0}")
+            BW_U=\$(convert_bw "\${BW_U_RAW:-0}")
 
             echo "================================================"
             echo "           ZIVPN UDP ACCOUNT MANAGER"
@@ -205,5 +207,5 @@ chmod +x "$SHORTCUT"
 
 clear
 echo "=========================================="
-echo "      INSTALASI BERHASIL"
+echo "      INSTALASI SELESAI    "
 echo "=========================================="
