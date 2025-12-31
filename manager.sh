@@ -1,46 +1,37 @@
 #!/bin/bash
 
-# --- 1. PRE-INSTALLATION ---
-# Menambahkan 'ufw' ke dependencies
-apt-get update -qq && apt-get install ufw iptables iptables-persistent jq vnstat curl wget sudo lsb-release zip unzip net-tools -y -qq
+# --- 1. PRE-INSTALLATION & BOOT PERSISTENCE ---
+apt-get update -qq && apt-get install iptables iptables-persistent jq vnstat curl wget sudo lsb-release zip unzip net-tools cron -y -qq
 
-# Config IP Forwarding (Wajib)
-echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/00-zivpn-core.conf
-sysctl -p /etc/sysctl.d/00-zivpn-core.conf >/dev/null 2>&1
+# A. PERBAIKAN IP FORWARDING (Supaya tahan reboot)
+# Hapus config lama jika ada
+sed -i '/net.ipv4.ip_forward/d' /etc/sysctl.conf
+# Tulis ke file utama (lebih kuat daripada .d/)
+echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+sysctl -p >/dev/null 2>&1
 
-# --- FUNGSI 1: UFW MANAGEMENT (OPEN PORT) ---
-apply_ufw_port() {
-    local PORT=$1
-    # Buka port di UFW (UDP & TCP untuk safety)
-    ufw allow "$PORT"/udp >/dev/null 2>&1
-    ufw allow "$PORT"/tcp >/dev/null 2>&1
-    # Pastikan SSH aman agar tidak terkunci
-    ufw allow 22/tcp >/dev/null 2>&1
-    # Reload UFW (Opsional, kadang tidak perlu reload jika rule simple)
-    # ufw reload >/dev/null 2>&1
-}
-
-# --- FUNGSI 2: IPTABLES NAT ONLY (SAVE NET) ---
-apply_nat_only() {
+# B. FUNGSI NAT (Hanya Masquerade - Aman untuk UFW/Firewall luar)
+apply_nat_boot() {
     local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
     
-    # Hanya bersihkan tabel NAT, jangan sentuh Filter/Input (biar UFW yang urus)
+    # Pastikan tabel NAT bersih dulu
     iptables -t nat -F
     
-    # 1. NAT Masquerade (Agar bisa internetan)
+    # Pasang Rule Masquerade (Kunci Internet Client)
     iptables -t nat -A POSTROUTING -o "$IF" -j MASQUERADE
     
-    # 2. Forwarding (Izinkan lalu lintas lewat)
-    # Kita append (-A) agar tidak merusak rule UFW yang sudah ada
+    # Pasang Forwarding
+    iptables -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
+    iptables -D FORWARD -j ACCEPT 2>/dev/null
     iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
     iptables -A FORWARD -j ACCEPT
     
-    # Simpan Permanen
+    # Simpan agar dibaca saat booting oleh netfilter-persistent
     netfilter-persistent save >/dev/null 2>&1
 }
 
-# Apply Default Config
-apply_nat_only
+# Terapkan NAT Sekarang
+apply_nat_boot
 
 # Path Setup
 CONFIG_DIR="/etc/zivpn"; CONFIG_FILE="/etc/zivpn/config.json"
@@ -51,9 +42,6 @@ MANAGER_PATH="/usr/local/bin/zivpn-manager.sh"; SHORTCUT="/usr/local/bin/menu"
 mkdir -p "$CONFIG_DIR"
 [ ! -s "$CONFIG_FILE" ] && echo '{"auth":{"config":[]}, "listen":"0.0.0.0:5667"}' > "$CONFIG_FILE"
 [ ! -s "$META_FILE" ] && echo '{"accounts":[]}' > "$META_FILE"
-
-# Apply UFW Default Port 5667
-apply_ufw_port 5667
 
 # --- 2. SCRIPT MANAGER UTAMA ---
 cat <<'EOF' > "/usr/local/bin/zivpn-manager.sh"
@@ -67,24 +55,7 @@ SERVICE_NAME="zivpn.service"
 
 C='\e[1;36m'; G='\e[1;32m'; Y='\e[1;33m'; R='\e[1;31m'; B='\e[1;34m'; NC='\e[0m'
 
-# FUNGSI UPDATE PORT (UFW + CONFIG)
-update_port_config() {
-    local OLD_PORT=$(jq -r '.listen' "$CONFIG_FILE" | cut -d':' -f2)
-    local NEW_PORT="$1"
-    
-    # 1. Hapus rule UFW lama
-    ufw delete allow "$OLD_PORT"/udp >/dev/null 2>&1
-    ufw delete allow "$OLD_PORT"/tcp >/dev/null 2>&1
-    
-    # 2. Tambah rule UFW baru
-    ufw allow "$NEW_PORT"/udp >/dev/null 2>&1
-    ufw allow "$NEW_PORT"/tcp >/dev/null 2>&1
-    
-    # 3. Update Config JSON (Force 0.0.0.0)
-    jq --arg p "0.0.0.0:$NEW_PORT" '.listen = $p' "$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "$CONFIG_FILE"
-}
-
-# FUNGSI NOTIF
+# FUNGSI NOTIFIKASI
 send_notif() {
     if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
         curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
@@ -92,9 +63,21 @@ send_notif() {
     fi
 }
 
-# SYNC & WATCHDOG
+# SYNC & REBOOT WATCHDOG
 sync_all() {
-    # Force Listen 0.0.0.0 jika format salah
+    # 1. CEK NAT MASQUERADE (Sering hilang saat reboot)
+    local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
+    # Jika rule masquerade hilang, pasang lagi!
+    if ! iptables -t nat -C POSTROUTING -o "$IF" -j MASQUERADE 2>/dev/null; then
+        iptables -t nat -A POSTROUTING -o "$IF" -j MASQUERADE
+    fi
+    
+    # 2. CEK IP FORWARDING
+    if [ "$(cat /proc/sys/net/ipv4/ip_forward)" != "1" ]; then
+        echo 1 > /proc/sys/net/ipv4/ip_forward
+    fi
+
+    # 3. FORCE CONFIG 0.0.0.0
     local CURRENT_LISTEN=$(jq -r '.listen' "$CONFIG_FILE")
     if [[ "$CURRENT_LISTEN" != "0.0.0.0:"* ]]; then
         local CUR_PORT=$(echo "$CURRENT_LISTEN" | grep -oE '[0-9]+$')
@@ -103,7 +86,7 @@ sync_all() {
         systemctl restart "$SERVICE_NAME" >/dev/null 2>&1
     fi
 
-    # Auto-Delete Expired
+    # 4. AUTO-DELETE EXPIRED
     local today=$(date +%s); local changed=false
     while read -r acc; do
         [ -z "$acc" ] && continue
@@ -116,11 +99,23 @@ sync_all() {
         fi
     done < <(jq -c '.accounts[]' "$META_FILE" 2>/dev/null)
 
+    # 5. SYNC USER
     local USERS_FROM_META=$(jq -c '[.accounts[].user]' "$META_FILE")
     jq --argjson u "$USERS_FROM_META" '.auth.config = $u' "$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "$CONFIG_FILE"
     
     [ "$changed" = true ] && systemctl restart "$SERVICE_NAME" >/dev/null 2>&1
 }
+
+# --- MODE CRON / REBOOT ---
+if [ "$1" == "cron" ]; then
+    # Tunggu sebentar jika baru reboot agar network ready
+    uptime_sec=$(cut -d. -f1 /proc/uptime)
+    if [ "$uptime_sec" -lt 60 ]; then sleep 10; fi
+    
+    sync_all
+    exit 0
+fi
+# --------------------------
 
 # TURBO TWEAKS
 manage_tweaks() {
@@ -147,8 +142,8 @@ draw_header() {
     local RAM_U=$(free -h | awk '/Mem:/ {print $3}'); local CPU=$(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}')"%"
     
     local CUR_PORT=$(jq -r '.listen' "$CONFIG_FILE" | cut -d':' -f2)
-    # Cek Port di UFW
-    ufw status 2>/dev/null | grep -q "$CUR_PORT" && PORT_STATUS="${G}UFW ALLOW $CUR_PORT${NC}" || PORT_STATUS="${R}Checking...${NC}"
+    local BIND_STAT=$(netstat -tulpn | grep ":$CUR_PORT " | grep -v ":::" | awk '{print $4}')
+    [[ ! -z "$BIND_STAT" ]] && PORT_STATUS="${G}Running ($CUR_PORT)${NC}" || PORT_STATUS="${R}Service Down${NC}"
 
     local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
     local BW_JSON=$(vnstat -i "$IF" --json 2>/dev/null)
@@ -158,11 +153,11 @@ draw_header() {
     local BW_STR="↓$(awk -v b="$RX" 'BEGIN {printf "%.2f", b/1024/1024}') MB | ↑$(awk -v b="$TX" 'BEGIN {printf "%.2f", b/1024/1024}') MB"
 
     echo -e "${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
-    echo -e "${C}┃${NC}        ${Y}ZIVPN UFW EDITION V55${NC}            ${C}┃${NC}"
+    echo -e "${C}┃${NC}        ${Y}ZIVPN REBOOT PROOF V59${NC}          ${C}┃${NC}"
     echo -e "${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "IP Address" "$IP"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Uptime" "$UP"
-    printf " ${C}┃${NC} %-12s : %-37s ${C}┃${NC}\n" "Active Port" "$PORT_STATUS"
+    printf " ${C}┃${NC} %-12s : %-37s ${C}┃${NC}\n" "Service Port" "$PORT_STATUS"
     if [ -f "$TWEAK_FILE" ]; then 
         printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Turbo Tweak" "[ON] Active"
     else 
@@ -178,8 +173,7 @@ while true; do
     echo -e "  ${C}[${Y}02${C}]${NC} Hapus Akun            ${C}[${Y}07${C}]${NC} Telegram Settings"
     echo -e "  ${C}[${Y}03${C}]${NC} Daftar Akun           ${C}[${Y}08${C}]${NC} Turbo Tweaks"
     echo -e "  ${C}[${Y}04${C}]${NC} Restart Service       ${C}[${Y}09${C}]${NC} Update Script"
-    echo -e "  ${C}[${Y}05${C}]${NC} Backup ZIP            ${C}[${Y}10${C}]${NC} Ganti Port (UFW)"
-    echo -e "  ${C}[${Y}00${C}]${NC} Keluar"
+    echo -e "  ${C}[${Y}05${C}]${NC} Backup ZIP            ${C}[${Y}00${C}]${NC} Keluar"
     echo -e "${C}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -ne "  ${B}Pilih Menu${NC}: " && read choice
     case $choice in
@@ -230,19 +224,6 @@ while true; do
             echo -e " 1. Enable Turbo\n 2. Disable Turbo"; read tw
             [ "$tw" == "1" ] && manage_tweaks "on"; [ "$tw" == "2" ] && manage_tweaks "off"; sleep 2 ;;
         9|09) wget -q -O /tmp/z.sh "https://raw.githubusercontent.com/richnstore/udepe/main/manager.sh" && mv /tmp/z.sh "$MANAGER_PATH" && chmod +x "$MANAGER_PATH" && exit 0 ;;
-        10|10)
-            echo -e "\n  ${Y}=== GANTI PORT (UFW) ===${NC}"
-            OLD_P=$(jq -r '.listen' "$CONFIG_FILE" | cut -d':' -f2)
-            echo -e "  Port Lama: ${G}$OLD_P${NC}"
-            echo -ne "  Port Baru: " && read NEWPORT
-            if [[ "$NEWPORT" =~ ^[0-9]+$ ]] && [ "$NEWPORT" -le 65535 ]; then
-                update_port_config "$NEWPORT"
-                systemctl restart "$SERVICE_NAME"
-                echo -e "  ${G}Sukses! Port berubah ke $NEWPORT.${NC}"
-                echo -e "  ${Y}UFW Updated: Allow $NEWPORT/udp${NC}"
-            else
-                echo -e "  ${R}Port tidak valid!${NC}"
-            fi; sleep 3 ;;
         0|00) exit 0 ;;
     esac
 done
@@ -251,13 +232,19 @@ EOF
 chmod +x "/usr/local/bin/zivpn-manager.sh"
 echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT" && chmod +x "$SHORTCUT"
 
-# Terapkan Rule Awal saat install
-CUR_PORT=$(jq -r '.listen' "$CONFIG_FILE" | cut -d':' -f2)
-[ -z "$CUR_PORT" ] && CUR_PORT="5667"
-ufw allow "$CUR_PORT"/udp >/dev/null 2>&1
-ufw allow "$CUR_PORT"/tcp >/dev/null 2>&1
+# --- BAGIAN KRUSIAL UNTUK REBOOT ---
+# 1. Pastikan Service Auto Start
+systemctl enable zivpn.service >/dev/null 2>&1
+systemctl start zivpn.service >/dev/null 2>&1
+
+# 2. Pasang Magic Cron (@reboot)
+# Ini adalah asuransi: Jika network mati/iptables hilang saat reboot, 
+# cron ini akan menjalankannya kembali secara otomatis saat nyala.
+(crontab -l 2>/dev/null | grep -v "zivpn-manager.sh") | crontab -
+(crontab -l 2>/dev/null; echo "0 0 * * * /usr/local/bin/zivpn-manager.sh cron") | crontab -
+(crontab -l 2>/dev/null; echo "@reboot /usr/local/bin/zivpn-manager.sh cron") | crontab -
 
 clear
-echo -e "${G}✅ V55 UFW EDITION INSTALLED!${NC}"
-echo -e "Diagnosa dihapus. Port management kini menggunakan UFW."
-echo -e "IPTables hanya digunakan untuk NAT Masquerade (Save Net)."
+echo -e "${G}✅ V59 REBOOT PROOF INSTALLED!${NC}"
+echo -e "Script telah dipasang dengan fitur Auto-Repair saat startup."
+echo -e "Koneksi client akan aman meskipun VPS direstart."
