@@ -2,7 +2,8 @@
 
 clear
 echo "=========================================="
-echo "      ZIVPN MANAGER INSTALLER    "
+echo "      ZIVPN MANAGER INSTALLER V6.1"
+echo "    (FIXED SYNTAX & FULL FEATURES)"
 echo "=========================================="
 echo ""
 
@@ -96,19 +97,47 @@ auto_remove_expired() {
     [ "\$changed" = true ] && systemctl restart "\$SERVICE_NAME" >/dev/null 2>&1
 }
 
+restore_accounts() {
+    clear
+    echo "=== RESTORE AKUN ZIVPN ==="
+    echo "1) Restore dari Backup Lokal"
+    echo "2) Restore via Telegram"
+    echo "0) Kembali"
+    read -rp " Pilih: " rest_opt
+    case \$rest_opt in
+        1)
+            if [ -f "/etc/zivpn/backup_config.json" ]; then
+                cp /etc/zivpn/backup_config.json "\$CONFIG_FILE"
+                cp /etc/zivpn/backup_meta.json "\$META_FILE"
+                systemctl restart "\$SERVICE_NAME"
+                echo "✅ Restore Lokal Berhasil!"; sleep 2
+            fi ;;
+        2)
+            echo "Menghubungi Bot Telegram..."
+            UPDATES=\$(curl -s "https://api.telegram.org/bot\$TG_BOT_TOKEN/getUpdates")
+            FILE_ID=\$(echo "\$UPDATES" | jq -r '.result | map(select(.message.document != null)) | last | .message.document.file_id // empty')
+            FILE_NAME=\$(echo "\$UPDATES" | jq -r '.result | map(select(.message.document != null)) | last | .message.document.file_name // empty')
+            if [ ! -z "\$FILE_ID" ] && [ "\$FILE_ID" != "null" ]; then
+                FILE_PATH=\$(curl -s "https://api.telegram.org/bot\$TG_BOT_TOKEN/getFile?file_id=\$FILE_ID" | jq -r '.result.file_path')
+                curl -s -o "/tmp/\$FILE_NAME" "https://api.telegram.org/file/bot\$TG_BOT_TOKEN/\$FILE_PATH"
+                [[ "\$FILE_NAME" == *"config.json"* ]] && cp "/tmp/\$FILE_NAME" "\$CONFIG_FILE"
+                [[ "\$FILE_NAME" == *"meta.json"* ]] && cp "/tmp/\$FILE_NAME" "\$META_FILE"
+                systemctl restart "\$SERVICE_NAME"
+                echo "✅ Restore \$FILE_NAME Berhasil!"; sleep 2
+            fi ;;
+    esac
+}
+
 update_script() {
-    echo "Sedang memeriksa pembaruan di GitHub..."
+    echo "Checking updates..."
     wget -q -O /tmp/zivpn-new.sh "\$GITHUB_URL"
     if [ \$? -eq 0 ]; then
-        # Ambil Token & ID yang sedang dipakai saat ini agar tidak terhapus
         sed -i "s|TG_BOT_TOKEN=.*|TG_BOT_TOKEN=\"\$TG_BOT_TOKEN\"|g" /tmp/zivpn-new.sh
         sed -i "s|TG_CHAT_ID=.*|TG_CHAT_ID=\"\$TG_CHAT_ID\"|g" /tmp/zivpn-new.sh
         mv /tmp/zivpn-new.sh "$MANAGER_SCRIPT"
         chmod +x "$MANAGER_SCRIPT"
-        echo "✅ Update Berhasil! Silakan buka kembali menu."
+        echo "✅ Update Success!"; sleep 1
         exit 0
-    else
-        echo "❌ Update Gagal!"; sleep 2
     fi
 }
 
@@ -132,7 +161,6 @@ case "\$1" in
             T_Y=\$(date +%Y); T_M=\$(date +%-m); T_D=\$(date +%-d)
             BW_D_RAW=\$(echo "\$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == \$T_Y and .date.month == \$T_M and .date.day == \$T_D) | .rx // 0" 2>/dev/null)
             BW_U_RAW=\$(echo "\$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == \$T_Y and .date.month == \$T_M and .date.day == \$T_D) | .tx // 0" 2>/dev/null)
-            
             BW_D=\$(convert_bw "\${BW_D_RAW:-0}")
             BW_U=\$(convert_bw "\${BW_U_RAW:-0}")
 
@@ -162,7 +190,7 @@ case "\$1" in
                 4) systemctl restart "\$SERVICE_NAME"; echo "Restarted."; sleep 1 ;;
                 5) clear; uptime; free -h; df -h /; read -rp "Enter..." ;;
                 6) cp "\$CONFIG_FILE" /etc/zivpn/backup_config.json; cp "\$META_FILE" /etc/zivpn/backup_meta.json; curl -s -F chat_id="\$TG_CHAT_ID" -F document=@/etc/zivpn/backup_config.json https://api.telegram.org/bot\$TG_BOT_TOKEN/sendDocument > /dev/null; curl -s -F chat_id="\$TG_CHAT_ID" -F document=@/etc/zivpn/backup_meta.json https://api.telegram.org/bot\$TG_BOT_TOKEN/sendDocument > /dev/null; echo "Backup terkirim!"; sleep 1 ;;
-                7) # Fungsi Restore (Logika yang diperbaiki sebelumnya) ;;
+                7) restore_accounts ;;
                 8) update_script ;;
                 0) exit 0 ;;
             esac
@@ -171,16 +199,14 @@ case "\$1" in
 esac
 EOF
 
-# 3. Shortcut & Permission
+# 3. Finalize
 chmod +x "$MANAGER_SCRIPT"
 echo "sudo bash $MANAGER_SCRIPT" > "$SHORTCUT"
 chmod +x "$SHORTCUT"
 
-# 4. PASANG ULANG CRON JOB (SETIAP JAM 00:00)
+# 4. Cron Job
 (crontab -l 2>/dev/null | grep -v "$MANAGER_SCRIPT cron") | crontab -
 (crontab -l 2>/dev/null; echo "0 0 * * * $MANAGER_SCRIPT cron") | crontab -
 
 clear
-echo "=========================================="
-echo "      INSTALASI SELESAI    "
-echo "=========================================="
+echo "✅ Instalasi Berhasil Fix! Ketik 'menu' sekarang."
