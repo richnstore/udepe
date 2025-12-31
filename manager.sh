@@ -1,34 +1,32 @@
 #!/bin/bash
 
-# --- 1. PRE-INSTALLATION & SYSTEM OPTIMIZATION ---
+# --- 1. PRE-INSTALLATION ---
 apt-get update -qq && apt-get install iptables iptables-persistent jq vnstat curl wget sudo lsb-release zip unzip net-tools -y -qq
 
-# IP Forwarding (Wajib untuk VPN)
+# Config IP Forwarding
 echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/00-zivpn-core.conf
 sysctl -p /etc/sysctl.d/00-zivpn-core.conf >/dev/null 2>&1
 
-# IPTables Persistence (FIXED: OPEN PORT 5667)
+# IPTables Persistence (Open Port 5667 & NAT)
 apply_iptables_immortal() {
     local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
     
-    # 1. Reset & Flush
     iptables -F
-    iptables -X
     iptables -t nat -F
-    iptables -t nat -X
-
-    # 2. Allow Input (PENTING: Agar client bisa masuk)
-    iptables -A INPUT -p tcp --dport 5667 -j ACCEPT
+    
+    # Allow Port 5667 (UDP & TCP)
     iptables -A INPUT -p udp --dport 5667 -j ACCEPT
+    iptables -A INPUT -p tcp --dport 5667 -j ACCEPT
+    
+    # Standard Accept
     iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
     iptables -A INPUT -i lo -j ACCEPT
-
-    # 3. NAT & Forwarding (Agar bisa internetan)
+    
+    # NAT Masquerade
     iptables -t nat -A POSTROUTING -o "$IF" -j MASQUERADE
     iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
     iptables -A FORWARD -j ACCEPT
     
-    # Simpan Permanen
     netfilter-persistent save >/dev/null 2>&1
 }
 apply_iptables_immortal
@@ -40,7 +38,8 @@ TWEAK_FILE="/etc/sysctl.d/99-zivpn-turbo.conf"
 MANAGER_PATH="/usr/local/bin/zivpn-manager.sh"; SHORTCUT="/usr/local/bin/menu"
 
 mkdir -p "$CONFIG_DIR"
-[ ! -s "$CONFIG_FILE" ] && echo '{"auth":{"config":[]}, "listen":":5667"}' > "$CONFIG_FILE"
+# Setup Config Awal (Force 0.0.0.0)
+[ ! -s "$CONFIG_FILE" ] && echo '{"auth":{"config":[]}, "listen":"0.0.0.0:5667"}' > "$CONFIG_FILE"
 [ ! -s "$META_FILE" ] && echo '{"accounts":[]}' > "$META_FILE"
 
 # --- 2. SCRIPT MANAGER UTAMA ---
@@ -64,11 +63,20 @@ send_notif() {
     fi
 }
 
-# SYNC & WATCHDOG
+# SYNC & FIX LISTEN ADDRESS
 sync_all() {
-    # Watchdog Port 5667 Check
+    # 1. FORCE IPV4 BINDING (Fix utama masalah connect)
+    # Jika config masih setting port saja atau IPv6, paksa ke 0.0.0.0:5667
+    local CURRENT_LISTEN=$(jq -r '.listen' "$CONFIG_FILE")
+    if [[ "$CURRENT_LISTEN" != "0.0.0.0:5667" ]]; then
+        jq '.listen = "0.0.0.0:5667"' "$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "$CONFIG_FILE"
+        systemctl restart "$SERVICE_NAME" >/dev/null 2>&1
+    fi
+
+    # 2. Watchdog IPTables
     iptables -C INPUT -p udp --dport 5667 -j ACCEPT 2>/dev/null || iptables -A INPUT -p udp --dport 5667 -j ACCEPT
     
+    # 3. Auto-Delete Expired
     local today=$(date +%s); local changed=false
     while read -r acc; do
         [ -z "$acc" ] && continue
@@ -81,6 +89,7 @@ sync_all() {
         fi
     done < <(jq -c '.accounts[]' "$META_FILE" 2>/dev/null)
 
+    # 4. Sync Config
     local USERS_FROM_META=$(jq -c '[.accounts[].user]' "$META_FILE")
     jq --argjson u "$USERS_FROM_META" '.auth.config = $u' "$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "$CONFIG_FILE"
     
@@ -116,13 +125,17 @@ draw_header() {
     local RX=$(echo "$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == $T_Y and .date.month == $T_M and .date.day == $T_D) | .rx // 0" 2>/dev/null)
     local TX=$(echo "$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == $T_Y and .date.month == $T_M and .date.day == $T_D) | .tx // 0" 2>/dev/null)
     local BW_STR="↓$(awk -v b="$RX" 'BEGIN {printf "%.2f", b/1024/1024}') MB | ↑$(awk -v b="$TX" 'BEGIN {printf "%.2f", b/1024/1024}') MB"
+    
+    # Cek Port Binding
+    local BIND_STAT=$(netstat -tulpn | grep 5667 | awk '{print $4}')
+    [[ "$BIND_STAT" == "0.0.0.0:5667" ]] && PORT_STATUS="${G}IPv4 OK${NC}" || PORT_STATUS="${R}Checking...${NC}"
 
     echo -e "${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
-    echo -e "${C}┃${NC}        ${Y}ZIVPN CONNECT FIX V51${NC}           ${C}┃${NC}"
+    echo -e "${C}┃${NC}        ${Y}ZIVPN CONNECTION FIX V52${NC}         ${C}┃${NC}"
     echo -e "${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "IP Address" "$IP"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Uptime" "$UP"
-    printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "CPU | RAM" "$CPU | $RAM_U"
+    printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Port 5667" "$PORT_STATUS"
     if [ -f "$TWEAK_FILE" ]; then 
         printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Turbo Tweak" "[ON] Active"
     else 
@@ -153,8 +166,9 @@ while true; do
             echo -e "  ${G}Sukses: User $n Aktif.${NC}"; sleep 2 ;;
         2|02) 
             mapfile -t LIST < <(jq -r '.accounts[].user' "$META_FILE")
+            [ ${#LIST[@]} -eq 0 ] && { echo -e "  ${R}Kosong.${NC}"; sleep 2; continue; }
             i=1; for u in "${LIST[@]}"; do echo "  $i. $u"; ((i++)); done
-            echo -ne "  No: " && read idx
+            echo -ne "  No (Enter=Batal): " && read idx
             if [[ "$idx" =~ ^[0-9]+$ ]] && [ "$idx" -ge 1 ] && [ "$idx" -le "${#LIST[@]}" ]; then
                 target=${LIST[$((idx-1))]}
                 jq --arg u "$target" '.accounts |= map(select(.user != $u))' "$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "$META_FILE"
@@ -190,13 +204,10 @@ while true; do
         9|09) wget -q -O /tmp/z.sh "https://raw.githubusercontent.com/richnstore/udepe/main/manager.sh" && mv /tmp/z.sh "$MANAGER_PATH" && chmod +x "$MANAGER_PATH" && exit 0 ;;
         10|10)
             echo -e "\n  ${Y}=== DIAGNOSIS KONEKSI ===${NC}"
-            echo -ne "  ${B}1. Status Service : ${NC}"; systemctl is-active "$SERVICE_NAME"
-            echo -ne "  ${B}2. Port 5667      : ${NC}"; netstat -tulpn | grep 5667 || echo -e "${R}TIDAK AKTIF${NC}"
-            echo -ne "  ${B}3. IP Forwarding  : ${NC}"; sysctl -n net.ipv4.ip_forward
-            echo -ne "  ${B}4. IPTables Input : ${NC}"; iptables -L INPUT -n | grep 5667 >/dev/null && echo -e "${G}ALLOWED${NC}" || echo -e "${R}BLOCKED${NC}"
-            echo -e "\n  ${Y}=== ERROR LOG TERAKHIR ===${NC}"
-            journalctl -u "$SERVICE_NAME" -n 10 --no-pager
-            echo -e "\n  ${Y}Tips: Jika port tidak muncul, restart service (Menu 04).${NC}"
+            echo -ne "  ${B}1. Listen Address : ${NC}"; grep "listen" "$CONFIG_FILE"
+            echo -ne "  ${B}2. Port Binding   : ${NC}"; netstat -tulpn | grep 5667
+            echo -e "\n  ${Y}Jika Binding = 0.0.0.0:5667, maka koneksi aman.${NC}"
+            echo -e "  ${Y}Jika masih IPv6 (:::5667), restart script ini.${NC}"
             read -rp "  Tekan Enter untuk kembali..." ;;
         0|00) exit 0 ;;
     esac
@@ -209,6 +220,6 @@ echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT" && chmod +x "$SHO
 (crontab -l 2>/dev/null; echo "0 0 * * * /usr/local/bin/zivpn-manager.sh cron") | crontab -
 
 clear
-echo -e "${G}✅ V51 CONNECTION FIX INSTALLED!${NC}"
-echo -e "Port 5667 UDP/TCP telah dibuka paksa di firewall."
-echo -e "Gunakan ${Y}Menu 10${NC} jika koneksi masih bermasalah."
+echo -e "${G}✅ V52 IPV4 FORCE FIX INSTALLED!${NC}"
+echo -e "Script akan otomatis mengubah listen address ke 0.0.0.0:5667"
+echo -e "Silakan cek Menu 10 untuk memastikan Binding sudah benar."
