@@ -1,4 +1,4 @@
 ## Install
 ```
-sudo -s git clone https://github.com/richnstore/udepe && cd udepe && chmod +x install.sh && ./install.sh
+wget https://raw.githubusercontent.com/richnstore/udepe/main/install.sh -O install.sh && chmod +x install.sh && bash install.sh
 ```
