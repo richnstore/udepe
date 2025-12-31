@@ -1,37 +1,46 @@
 #!/bin/bash
 
 # --- 1. PRE-INSTALLATION ---
-apt-get update -qq && apt-get install iptables iptables-persistent jq vnstat curl wget sudo lsb-release zip unzip net-tools tcpdump -y -qq
+# Menambahkan 'ufw' ke dependencies
+apt-get update -qq && apt-get install ufw iptables iptables-persistent jq vnstat curl wget sudo lsb-release zip unzip net-tools -y -qq
 
-# Config IP Forwarding
+# Config IP Forwarding (Wajib)
 echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/00-zivpn-core.conf
 sysctl -p /etc/sysctl.d/00-zivpn-core.conf >/dev/null 2>&1
 
-# FORCE FLUSH IPTABLES (NUCLEAR OPTION)
-# Kita hapus semua aturan lama yang mungkin nyangkut
-apply_iptables_reset() {
+# --- FUNGSI 1: UFW MANAGEMENT (OPEN PORT) ---
+apply_ufw_port() {
+    local PORT=$1
+    # Buka port di UFW (UDP & TCP untuk safety)
+    ufw allow "$PORT"/udp >/dev/null 2>&1
+    ufw allow "$PORT"/tcp >/dev/null 2>&1
+    # Pastikan SSH aman agar tidak terkunci
+    ufw allow 22/tcp >/dev/null 2>&1
+    # Reload UFW (Opsional, kadang tidak perlu reload jika rule simple)
+    # ufw reload >/dev/null 2>&1
+}
+
+# --- FUNGSI 2: IPTABLES NAT ONLY (SAVE NET) ---
+apply_nat_only() {
     local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
     
-    # 1. Set Default Policy to ACCEPT (Sementara untuk testing)
-    iptables -P INPUT ACCEPT
-    iptables -P FORWARD ACCEPT
-    iptables -P OUTPUT ACCEPT
-    
-    # 2. Flush All Rules
-    iptables -F
+    # Hanya bersihkan tabel NAT, jangan sentuh Filter/Input (biar UFW yang urus)
     iptables -t nat -F
-    iptables -X
     
-    # 3. Allow Port 5667 Explicitly
-    iptables -A INPUT -p udp --dport 5667 -j ACCEPT
-    iptables -A INPUT -p tcp --dport 5667 -j ACCEPT
-    
-    # 4. NAT Masquerade
+    # 1. NAT Masquerade (Agar bisa internetan)
     iptables -t nat -A POSTROUTING -o "$IF" -j MASQUERADE
     
+    # 2. Forwarding (Izinkan lalu lintas lewat)
+    # Kita append (-A) agar tidak merusak rule UFW yang sudah ada
+    iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+    iptables -A FORWARD -j ACCEPT
+    
+    # Simpan Permanen
     netfilter-persistent save >/dev/null 2>&1
 }
-apply_iptables_reset
+
+# Apply Default Config
+apply_nat_only
 
 # Path Setup
 CONFIG_DIR="/etc/zivpn"; CONFIG_FILE="/etc/zivpn/config.json"
@@ -42,6 +51,9 @@ MANAGER_PATH="/usr/local/bin/zivpn-manager.sh"; SHORTCUT="/usr/local/bin/menu"
 mkdir -p "$CONFIG_DIR"
 [ ! -s "$CONFIG_FILE" ] && echo '{"auth":{"config":[]}, "listen":"0.0.0.0:5667"}' > "$CONFIG_FILE"
 [ ! -s "$META_FILE" ] && echo '{"accounts":[]}' > "$META_FILE"
+
+# Apply UFW Default Port 5667
+apply_ufw_port 5667
 
 # --- 2. SCRIPT MANAGER UTAMA ---
 cat <<'EOF' > "/usr/local/bin/zivpn-manager.sh"
@@ -55,6 +67,23 @@ SERVICE_NAME="zivpn.service"
 
 C='\e[1;36m'; G='\e[1;32m'; Y='\e[1;33m'; R='\e[1;31m'; B='\e[1;34m'; NC='\e[0m'
 
+# FUNGSI UPDATE PORT (UFW + CONFIG)
+update_port_config() {
+    local OLD_PORT=$(jq -r '.listen' "$CONFIG_FILE" | cut -d':' -f2)
+    local NEW_PORT="$1"
+    
+    # 1. Hapus rule UFW lama
+    ufw delete allow "$OLD_PORT"/udp >/dev/null 2>&1
+    ufw delete allow "$OLD_PORT"/tcp >/dev/null 2>&1
+    
+    # 2. Tambah rule UFW baru
+    ufw allow "$NEW_PORT"/udp >/dev/null 2>&1
+    ufw allow "$NEW_PORT"/tcp >/dev/null 2>&1
+    
+    # 3. Update Config JSON (Force 0.0.0.0)
+    jq --arg p "0.0.0.0:$NEW_PORT" '.listen = $p' "$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "$CONFIG_FILE"
+}
+
 # FUNGSI NOTIF
 send_notif() {
     if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
@@ -65,16 +94,16 @@ send_notif() {
 
 # SYNC & WATCHDOG
 sync_all() {
-    # Force Listen 0.0.0.0
+    # Force Listen 0.0.0.0 jika format salah
     local CURRENT_LISTEN=$(jq -r '.listen' "$CONFIG_FILE")
-    if [[ "$CURRENT_LISTEN" != "0.0.0.0:5667" ]]; then
-        jq '.listen = "0.0.0.0:5667"' "$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "$CONFIG_FILE"
+    if [[ "$CURRENT_LISTEN" != "0.0.0.0:"* ]]; then
+        local CUR_PORT=$(echo "$CURRENT_LISTEN" | grep -oE '[0-9]+$')
+        [ -z "$CUR_PORT" ] && CUR_PORT="5667"
+        jq --arg p "0.0.0.0:$CUR_PORT" '.listen = $p' "$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "$CONFIG_FILE"
         systemctl restart "$SERVICE_NAME" >/dev/null 2>&1
     fi
-    
-    # Watchdog Firewall
-    iptables -C INPUT -p udp --dport 5667 -j ACCEPT 2>/dev/null || iptables -A INPUT -p udp --dport 5667 -j ACCEPT
 
+    # Auto-Delete Expired
     local today=$(date +%s); local changed=false
     while read -r acc; do
         [ -z "$acc" ] && continue
@@ -93,7 +122,7 @@ sync_all() {
     [ "$changed" = true ] && systemctl restart "$SERVICE_NAME" >/dev/null 2>&1
 }
 
-# MANAJEMEN TWEAK
+# TURBO TWEAKS
 manage_tweaks() {
     if [ "$1" == "on" ]; then
         cat <<EOT > "$TWEAK_FILE"
@@ -117,22 +146,23 @@ draw_header() {
     local IP=$(curl -s ifconfig.me || echo "No IP"); local UP=$(uptime -p | sed 's/up //')
     local RAM_U=$(free -h | awk '/Mem:/ {print $3}'); local CPU=$(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}')"%"
     
+    local CUR_PORT=$(jq -r '.listen' "$CONFIG_FILE" | cut -d':' -f2)
+    # Cek Port di UFW
+    ufw status 2>/dev/null | grep -q "$CUR_PORT" && PORT_STATUS="${G}UFW ALLOW $CUR_PORT${NC}" || PORT_STATUS="${R}Checking...${NC}"
+
     local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
     local BW_JSON=$(vnstat -i "$IF" --json 2>/dev/null)
     local T_D=$(date +%-d); local T_M=$(date +%-m); local T_Y=$(date +%Y)
     local RX=$(echo "$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == $T_Y and .date.month == $T_M and .date.day == $T_D) | .rx // 0" 2>/dev/null)
     local TX=$(echo "$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == $T_Y and .date.month == $T_M and .date.day == $T_D) | .tx // 0" 2>/dev/null)
     local BW_STR="↓$(awk -v b="$RX" 'BEGIN {printf "%.2f", b/1024/1024}') MB | ↑$(awk -v b="$TX" 'BEGIN {printf "%.2f", b/1024/1024}') MB"
-    
-    local BIND_STAT=$(netstat -tulpn | grep 5667 | awk '{print $4}')
-    [[ "$BIND_STAT" == "0.0.0.0:5667" ]] && PORT_STATUS="${G}IPv4 OK${NC}" || PORT_STATUS="${R}Checking...${NC}"
 
     echo -e "${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
-    echo -e "${C}┃${NC}        ${Y}ZIVPN PACKET SNIFFER V53${NC}         ${C}┃${NC}"
+    echo -e "${C}┃${NC}        ${Y}ZIVPN UFW EDITION V55${NC}            ${C}┃${NC}"
     echo -e "${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "IP Address" "$IP"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Uptime" "$UP"
-    printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Port 5667" "$PORT_STATUS"
+    printf " ${C}┃${NC} %-12s : %-37s ${C}┃${NC}\n" "Active Port" "$PORT_STATUS"
     if [ -f "$TWEAK_FILE" ]; then 
         printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Turbo Tweak" "[ON] Active"
     else 
@@ -148,7 +178,7 @@ while true; do
     echo -e "  ${C}[${Y}02${C}]${NC} Hapus Akun            ${C}[${Y}07${C}]${NC} Telegram Settings"
     echo -e "  ${C}[${Y}03${C}]${NC} Daftar Akun           ${C}[${Y}08${C}]${NC} Turbo Tweaks"
     echo -e "  ${C}[${Y}04${C}]${NC} Restart Service       ${C}[${Y}09${C}]${NC} Update Script"
-    echo -e "  ${C}[${Y}05${C}]${NC} Backup ZIP            ${C}[${Y}10${C}]${NC} Cek & Monitor Trafik"
+    echo -e "  ${C}[${Y}05${C}]${NC} Backup ZIP            ${C}[${Y}10${C}]${NC} Ganti Port (UFW)"
     echo -e "  ${C}[${Y}00${C}]${NC} Keluar"
     echo -e "${C}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -ne "  ${B}Pilih Menu${NC}: " && read choice
@@ -163,6 +193,7 @@ while true; do
             echo -e "  ${G}Sukses: User $n Aktif.${NC}"; sleep 2 ;;
         2|02) 
             mapfile -t LIST < <(jq -r '.accounts[].user' "$META_FILE")
+            [ ${#LIST[@]} -eq 0 ] && { echo -e "  ${R}Kosong.${NC}"; sleep 1; continue; }
             i=1; for u in "${LIST[@]}"; do echo "  $i. $u"; ((i++)); done
             echo -ne "  No: " && read idx
             if [[ "$idx" =~ ^[0-9]+$ ]] && [ "$idx" -ge 1 ] && [ "$idx" -le "${#LIST[@]}" ]; then
@@ -179,9 +210,10 @@ while true; do
         4|04) systemctl restart "$SERVICE_NAME"; echo -e " ${G}DONE!${NC}"; sleep 1 ;;
         5|05) 
             ZIP="/tmp/zivpn_backup.zip"; zip -j "$ZIP" "$CONFIG_FILE" "$META_FILE" >/dev/null
-            curl -s -F chat_id="$TG_CHAT_ID" -F document=@"$ZIP" "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument" >/dev/null
-            rm -f "$ZIP"; echo -e " ${G}Sent!${NC}"; sleep 2 ;;
+            [ -n "$TG_BOT_TOKEN" ] && curl -s -F chat_id="$TG_CHAT_ID" -F document=@"$ZIP" "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument" >/dev/null
+            rm -f "$ZIP"; echo -e " ${G}Selesai.${NC}"; sleep 2 ;;
         6|06) 
+            [ -z "$TG_BOT_TOKEN" ] && { echo "Set Telegram dulu."; sleep 1; continue; }
             JSON=$(curl -s "https://api.telegram.org/bot$TG_BOT_TOKEN/getUpdates?limit=100")
             FID=$(echo "$JSON" | jq -r '.result | reverse | .[] | select(.message.document != null) | .message.document.file_id' | head -n 1)
             FPATH=$(curl -s "https://api.telegram.org/bot$TG_BOT_TOKEN/getFile?file_id=$FID" | jq -r '.result.file_path')
@@ -199,20 +231,18 @@ while true; do
             [ "$tw" == "1" ] && manage_tweaks "on"; [ "$tw" == "2" ] && manage_tweaks "off"; sleep 2 ;;
         9|09) wget -q -O /tmp/z.sh "https://raw.githubusercontent.com/richnstore/udepe/main/manager.sh" && mv /tmp/z.sh "$MANAGER_PATH" && chmod +x "$MANAGER_PATH" && exit 0 ;;
         10|10)
-            echo -e "\n  ${Y}=== LIVE TRAFFIC MONITOR ===${NC}"
-            echo -e "  Script akan memantau paket data di Port 5667 selama 15 detik."
-            echo -e "  ${G}SILAKAN COBA CONNECT DARI HP SEKARANG!${NC}"
-            echo -e "  -------------------------------------------------"
-            # TCPDUMP Monitoring
-            timeout 15 tcpdump -i any udp port 5667 -n -v
-            echo -e "  -------------------------------------------------"
-            echo -e "  ${B}ANALISIS:${NC}"
-            echo -e "  1. Jika layar ${R}KOSONG${NC} (tidak ada teks muncul):"
-            echo -e "     Berarti Firewall VPS (AWS/Aliyun/GCP) memblokir port 5667."
-            echo -e "     -> Buka website provider VPS Anda, cari 'Security Group', Allow UDP 5667."
-            echo -e "  2. Jika ada teks ${G}muncul${NC} tapi tetap disconnect:"
-            echo -e "     Berarti paket masuk, tapi Config/Password di HP salah."
-            read -rp "  Tekan Enter untuk kembali..." ;;
+            echo -e "\n  ${Y}=== GANTI PORT (UFW) ===${NC}"
+            OLD_P=$(jq -r '.listen' "$CONFIG_FILE" | cut -d':' -f2)
+            echo -e "  Port Lama: ${G}$OLD_P${NC}"
+            echo -ne "  Port Baru: " && read NEWPORT
+            if [[ "$NEWPORT" =~ ^[0-9]+$ ]] && [ "$NEWPORT" -le 65535 ]; then
+                update_port_config "$NEWPORT"
+                systemctl restart "$SERVICE_NAME"
+                echo -e "  ${G}Sukses! Port berubah ke $NEWPORT.${NC}"
+                echo -e "  ${Y}UFW Updated: Allow $NEWPORT/udp${NC}"
+            else
+                echo -e "  ${R}Port tidak valid!${NC}"
+            fi; sleep 3 ;;
         0|00) exit 0 ;;
     esac
 done
@@ -220,9 +250,14 @@ EOF
 
 chmod +x "/usr/local/bin/zivpn-manager.sh"
 echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT" && chmod +x "$SHORTCUT"
-(crontab -l 2>/dev/null | grep -v "zivpn-manager.sh") | crontab -
-(crontab -l 2>/dev/null; echo "0 0 * * * /usr/local/bin/zivpn-manager.sh cron") | crontab -
+
+# Terapkan Rule Awal saat install
+CUR_PORT=$(jq -r '.listen' "$CONFIG_FILE" | cut -d':' -f2)
+[ -z "$CUR_PORT" ] && CUR_PORT="5667"
+ufw allow "$CUR_PORT"/udp >/dev/null 2>&1
+ufw allow "$CUR_PORT"/tcp >/dev/null 2>&1
 
 clear
-echo -e "${G}✅ V53 PACKET SNIFFER INSTALLED!${NC}"
-echo -e "Gunakan ${Y}Menu 10${NC} untuk melihat apakah sinyal dari HP sampai ke VPS atau tidak."
+echo -e "${G}✅ V55 UFW EDITION INSTALLED!${NC}"
+echo -e "Diagnosa dihapus. Port management kini menggunakan UFW."
+echo -e "IPTables hanya digunakan untuk NAT Masquerade (Save Net)."
