@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# --- 1. PRE-INSTALLATION & CORE OPTIMIZATION (JANGAN DIHAPUS) ---
+# --- 1. PRE-INSTALLATION & SYSTEM OPTIMIZATION ---
 apt-get update -qq && apt-get install iptables iptables-persistent jq vnstat curl wget sudo lsb-release zip unzip -y -qq
 
-# Tweak Kernel Khusus UDP & TCP (Persistent)
+# UDP & TCP Turbo Tweaks (Persistent)
 apply_core_tweaks() {
     cat <<EOF > /etc/sysctl.d/99-zivpn.conf
 net.ipv4.ip_forward = 1
@@ -20,7 +20,7 @@ EOF
 }
 apply_core_tweaks
 
-# IPTables Persistence (NAT Masquerade)
+# IPTables NAT Persistence
 apply_iptables_immortal() {
     local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
     iptables -F && iptables -t nat -F
@@ -31,7 +31,7 @@ apply_iptables_immortal() {
 }
 apply_iptables_immortal
 
-# Path Config (Definisi awal untuk installer)
+# Directory Setup
 CONFIG_DIR="/etc/zivpn"; CONFIG_FILE="/etc/zivpn/config.json"
 META_FILE="/etc/zivpn/accounts_meta.json"; TG_CONF="/etc/zivpn/telegram.conf"
 MANAGER_PATH="/usr/local/bin/zivpn-manager.sh"; SHORTCUT="/usr/local/bin/menu"
@@ -44,7 +44,6 @@ mkdir -p "$CONFIG_DIR"
 cat <<'EOF' > "/usr/local/bin/zivpn-manager.sh"
 #!/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-# DEFINISI PATH DI DALAM SCRIPT AGAR UPDATE TIDAK EROR
 MANAGER_PATH="/usr/local/bin/zivpn-manager.sh"
 TG_CONF="/etc/zivpn/telegram.conf"; [ -f "$TG_CONF" ] && source "$TG_CONF"
 CONFIG_FILE="/etc/zivpn/config.json"; META_FILE="/etc/zivpn/accounts_meta.json"
@@ -52,7 +51,7 @@ SERVICE_NAME="zivpn.service"
 
 C='\e[1;36m'; G='\e[1;32m'; Y='\e[1;33m'; R='\e[1;31m'; B='\e[1;34m'; NC='\e[0m'
 
-# Watchdog & Sync Logic (Memastikan Tweak & IPtables Selalu Aktif)
+# Watchdog & Sync Logic
 sync_and_clean() {
     [ "$(sysctl -n net.ipv4.ip_forward)" != "1" ] && sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
     local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
@@ -78,7 +77,7 @@ draw_header() {
     local RAM_U=$(free -h | awk '/Mem:/ {print $3}'); local CPU=$(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}')"%"
     local QDISC=$(sysctl net.core.default_qdisc | awk '{print $3}')
     echo -e "${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
-    echo -e "${C}┃${NC}        ${Y}ZIVPN ROBUST EDITION V42${NC}         ${C}┃${NC}"
+    echo -e "${C}┃${NC}        ${Y}ZIVPN GUARDIAN EDITION V43${NC}       ${C}┃${NC}"
     echo -e "${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "IP Address" "$IP"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Uptime" "$UP"
@@ -128,21 +127,27 @@ while true; do
             echo -e " ${G}DONE!${NC}"; sleep 1 ;;
         5|05) 
             if [ -z "$TG_BOT_TOKEN" ]; then echo -e "  ${R}Set Telegram Dulu (07)!${NC}"; sleep 2; continue; fi
-            echo -ne "  Mengompres data..."; ZIP="/tmp/zivpn_backup.zip"
+            echo -ne "  Mengompres data ZIP..."; ZIP="/tmp/zivpn_backup.zip"
             zip -j "$ZIP" "$CONFIG_FILE" "$META_FILE" >/dev/null
-            RES=$(curl -s -F chat_id="$TG_CHAT_ID" -F document=@"$ZIP" "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument")
-            if [[ "$RES" == *"ok\":true"* ]]; then echo -e " ${G}Backup Terkirim!${NC}"; else echo -e " ${R}Gagal Kirim!${NC}"; fi
+            if [ $? -eq 0 ]; then
+                RES=$(curl -s -F chat_id="$TG_CHAT_ID" -F document=@"$ZIP" "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument")
+                if [[ "$RES" == *"ok\":true"* ]]; then echo -e " ${G}Backup Berhasil Terkirim!${NC}"; else echo -e " ${R}Gagal Kirim ke Telegram!${NC}"; fi
+            else echo -e " ${R}Gagal membuat ZIP!${NC}"; fi
             rm -f "$ZIP"; sleep 2 ;;
         6|06) 
             if [ -z "$TG_BOT_TOKEN" ]; then echo -e "  ${R}Set Telegram Dulu (07)!${NC}"; sleep 2; continue; fi
-            echo -e "  ${Y}Mengambil file terbaru dari Telegram...${NC}"
+            echo -e "  ${Y}Mencari data terbaru di Telegram...${NC}"
             JSON_DATA=$(curl -s "https://api.telegram.org/bot$TG_BOT_TOKEN/getUpdates?limit=100")
             FID=$(echo "$JSON_DATA" | jq -r '.result | reverse | .[] | select(.message.document != null) | .message.document.file_id' | head -n 1)
             if [ -z "$FID" ] || [ "$FID" == "null" ]; then echo -e "  ${R}Gagal: File ZIP tidak ditemukan!${NC}"; else
                 FPATH=$(curl -s "https://api.telegram.org/bot$TG_BOT_TOKEN/getFile?file_id=$FID" | jq -r '.result.file_path')
-                wget -q -O /tmp/restore.zip "https://api.telegram.org/file/bot$TG_BOT_TOKEN/$FPATH"
-                unzip -o /tmp/restore.zip -d /etc/zivpn/ >/dev/null && systemctl restart "$SERVICE_NAME"
-                echo -e "  ${G}Restore Berhasil!${NC}"; rm -f /tmp/restore.zip
+                if [ ! -z "$FPATH" ] && [ "$FPATH" != "null" ]; then
+                    wget -q -O /tmp/restore.zip "https://api.telegram.org/file/bot$TG_BOT_TOKEN/$FPATH"
+                    if [ -s /tmp/restore.zip ]; then
+                        unzip -o /tmp/restore.zip -d /etc/zivpn/ >/dev/null && systemctl restart "$SERVICE_NAME"
+                        echo -e "  ${G}Restore Berhasil! Database sinkron.${NC}"; rm -f /tmp/restore.zip
+                    else echo -e "  ${R}Gagal download file ZIP!${NC}"; fi
+                else echo -e "  ${R}Gagal mendapatkan jalur file!${NC}"; fi
             fi; sleep 2 ;;
         7|07) 
             echo -ne "  Token: " && read NT; echo -ne "  ID: " && read NI
@@ -153,7 +158,7 @@ while true; do
             wget -q -O /tmp/z.sh "https://raw.githubusercontent.com/richnstore/udepe/main/manager.sh"
             if [ -f /tmp/z.sh ]; then
                 mv /tmp/z.sh "$MANAGER_PATH" && chmod +x "$MANAGER_PATH"
-                echo -e "  ${G}Update Selesai! Script telah diperbarui.${NC}"; sleep 2; exit 0
+                echo -e "  ${G}Update Selesai!${NC}"; sleep 2; exit 0
             else echo -e "  ${R}Gagal download update!${NC}"; sleep 2; fi ;;
         0|00) exit 0 ;;
         *) echo -e "  ${R}Menu tidak ada!${NC}"; sleep 1 ;;
@@ -168,5 +173,5 @@ echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT" && chmod +x "$SHO
 (crontab -l 2>/dev/null; echo "0 0 * * * /usr/local/bin/zivpn-manager.sh cron") | crontab -
 
 clear
-echo -e "${G}✅ V42 ROBUST EDITION INSTALLED!${NC}"
-echo -e "Fitur Update telah diperbaiki dan Respon Menu dipastikan Muncul."
+echo -e "${G}✅ V43 GUARDIAN EDITION INSTALLED!${NC}"
+echo -e "Backup/Restore diperkuat dengan validasi file dan raw output JQ."
