@@ -2,12 +2,12 @@
 
 clear
 echo "=================================================="
-echo "          ZIVPN MANAGER INSTALLER"
-echo "       BY RICH NARENDRA X GEMINI AI"
+echo "      ZIVPN MANAGER INSTALLER"
+echo "    BY RICH NARENDRA X GEMINI AI"
 echo "=================================================="
 echo ""
 
-# URL GitHub untuk Fitur Update (Ganti dengan link Anda jika sudah di-upload)
+# URL GitHub Raw milik Anda
 GITHUB_RAW_URL="https://raw.githubusercontent.com/richnstore/udepe/main/manager.sh"
 
 # Input Telegram (Looping jika kosong)
@@ -24,14 +24,14 @@ while true; do
 done
 
 echo ""
-echo "[-] Memulai Optimasi Sistem & Jaringan..."
+echo "[-] Memulai Konfigurasi Sistem..."
 
-# 1. Install Tool Pendukung
+# 1. Install Dependencies
 apt-get update
 apt-get install iptables-persistent jq vnstat curl wget sudo -y
 
-# 2. Aktifkan IP Forwarding & UDP Buffer Tuning (Ultra Speed)
-echo "[-] Menyetel Parameter Kernel..."
+# 2. Kernel Tuning (UDP Optimization & IP Forwarding)
+echo "[-] Mengoptimalkan Jaringan (Buffer 16MB)..."
 sed -i '/net.ipv4.ip_forward/d' /etc/sysctl.conf
 sed -i '/net.core.rmem_max/d' /etc/sysctl.conf
 sed -i '/net.core.wmem_max/d' /etc/sysctl.conf
@@ -50,8 +50,6 @@ net.ipv4.udp_rmem_min = 16384
 net.ipv4.udp_wmem_min = 16384
 net.ipv4.tcp_fastopen = 3
 EOF
-
-# Terapkan sysctl
 sysctl -p
 
 # 3. Simpan Iptables agar Permanen
@@ -101,6 +99,32 @@ send_tg() {
         -d chat_id="\$TG_CHAT_ID" -d parse_mode="HTML" --data-urlencode text="\$MSG" >/dev/null
 }
 
+system_status() {
+    clear
+    local OS_NAME=\$(grep -P '^PRETTY_NAME' /etc/os-release | cut -d'"' -f2)
+    local CPU_USAGE=\$(top -bn1 | grep "Cpu(s)" | awk '{print \$2 + \$4}')
+    local MEM_TOTAL=\$(free -h | awk '/Mem:/ {print \$2}')
+    local MEM_USED=\$(free -h | awk '/Mem:/ {print \$3}')
+    local DISK_TOTAL=\$(df -h / | awk '/\// {print \$2}' | tail -n 1)
+    local DISK_USED=\$(df -h / | awk '/\// {print \$3}' | tail -n 1)
+    local UPTIME=\$(uptime -p | sed 's/up //')
+    local LOAD_AVG=\$(cat /proc/loadavg | awk '{print \$1", "\$2", "\$3}')
+
+    echo -e " \e[1;36m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\e[0m"
+    echo -e " \e[1;36m┃\e[0m \e[1;33m          SYSTEM VPS INFORMATION         \e[0m \e[1;36m┃\e[0m"
+    echo -e " \e[1;36m┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\e[0m"
+    printf " \e[1;36m┃\e[0m  %-15s : %-23s \e[1;36m┃\e[0m\n" "OS" "\$OS_NAME"
+    printf " \e[1;36m┃\e[0m  %-15s : %-23s \e[1;36m┃\e[0m\n" "Uptime" "\$UPTIME"
+    printf " \e[1;36m┃\e[0m  %-15s : %-23s \e[1;36m┃\e[0m\n" "Load Average" "\$LOAD_AVG"
+    echo -e " \e[1;36m┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\e[0m"
+    printf " \e[1;36m┃\e[0m  %-15s : %-23s \e[1;36m┃\e[0m\n" "CPU Usage" "\$CPU_USAGE %"
+    printf " \e[1;36m┃\e[0m  %-15s : %-23s \e[1;36m┃\e[0m\n" "RAM (Used/Tot)" "\$MEM_USED / \$MEM_TOTAL"
+    printf " \e[1;36m┃\e[0m  %-15s : %-23s \e[1;36m┃\e[0m\n" "Disk (Used/Tot)" "\$DISK_USED / \$DISK_TOTAL"
+    echo -e " \e[1;36m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\e[0m"
+    echo ""
+    read -rp " Tekan [Enter] untuk kembali..."
+}
+
 sync_accounts() {
     local all_pass=\$(jq -r '.auth.config[]' "\$CONFIG_FILE" 2>/dev/null)
     for pass in \$all_pass; do
@@ -135,7 +159,7 @@ restore_accounts() {
     clear
     echo "=== RESTORE AKUN ZIVPN ==="
     echo "1) Restore dari Backup Lokal"
-    echo "2) Restore via Telegram (Forward file ke bot dulu)"
+    echo "2) Restore via Telegram"
     echo "0) Kembali"
     read -rp " Pilih: " rest_opt
     case \$rest_opt in
@@ -158,24 +182,20 @@ restore_accounts() {
                 [[ "\$FILE_NAME" == *"meta.json"* ]] && cp "/tmp/\$FILE_NAME" "\$META_FILE"
                 systemctl restart "\$SERVICE_NAME"
                 echo "✅ Restore \$FILE_NAME Berhasil!"; sleep 2
-            else
-                echo "❌ File tidak ditemukan di Bot."; sleep 2
             fi ;;
     esac
 }
 
 update_script() {
-    echo "Memeriksa versi terbaru di GitHub..."
+    echo "Checking updates from GitHub..."
     wget -q -O /tmp/zivpn-new.sh "\$GITHUB_URL"
     if [ \$? -eq 0 ]; then
         sed -i "s|TG_BOT_TOKEN=.*|TG_BOT_TOKEN=\"\$TG_BOT_TOKEN\"|g" /tmp/zivpn-new.sh
         sed -i "s|TG_CHAT_ID=.*|TG_CHAT_ID=\"\$TG_CHAT_ID\"|g" /tmp/zivpn-new.sh
         mv /tmp/zivpn-new.sh "$MANAGER_SCRIPT"
         chmod +x "$MANAGER_SCRIPT"
-        echo "✅ Update Berhasil!"; sleep 1
+        echo "✅ Update Sukses!"; sleep 1
         exit 0
-    else
-        echo "❌ Gagal Update."; sleep 2
     fi
 }
 
@@ -202,23 +222,23 @@ case "\$1" in
             BW_D=\$(convert_bw "\${BW_D_RAW:-0}")
             BW_U=\$(convert_bw "\${BW_U_RAW:-0}")
 
-            echo "================================================"
-            echo "           ZIVPN UDP ACCOUNT MANAGER"
-            echo "================================================"
-            echo " IP VPS       : \${VPS_IP}"
-            echo " ISP          : \${ISP_NAME}"
-            echo " Hari Ini     : ↓ \$BW_D | ↑ \$BW_U"
-            echo "================================================"
-            echo " 1) Lihat Semua Akun"
-            echo " 2) Tambah Akun Baru"
-            echo " 3) Hapus Akun"
-            echo " 4) Restart Layanan"
-            echo " 5) Status System VPS"
-            echo " 6) Backup Ke Telegram"
-            echo " 7) Restore Akun (Lokal/Telegram)"
-            echo " 8) Update Script (GitHub)"
-            echo " 0) Keluar"
-            echo "================================================"
+            echo -e "\e[1;32m================================================\e[0m"
+            echo -e "\e[1;33m           ZIVPN UDP ACCOUNT MANAGER            \e[0m"
+            echo -e "\e[1;32m================================================\e[0m"
+            echo -e " IP VPS       : \${VPS_IP}"
+            echo -e " ISP          : \${ISP_NAME}"
+            echo -e " Hari Ini     : \e[1;36m↓ \$BW_D | ↑ \$BW_U\e[0m"
+            echo -e "\e[1;32m================================================\e[0m"
+            echo -e " 1) Lihat Semua Akun"
+            echo -e " 2) Tambah Akun Baru"
+            echo -e " 3) Hapus Akun"
+            echo -e " 4) Restart Layanan"
+            echo -e " 5) Status System VPS"
+            echo -e " 6) Backup Ke Telegram"
+            echo -e " 7) Restore Akun (Lokal/Telegram)"
+            echo -e " 8) Update Script (GitHub)"
+            echo -e " 0) Keluar"
+            echo -e "\e[1;32m================================================\e[0m"
             read -rp " Pilih Menu: " choice
 
             case \$choice in
@@ -226,7 +246,7 @@ case "\$1" in
                 2) read -rp "User: " n; read -rp "Hari: " d; [[ ! "\$d" =~ ^[0-9]+$ ]] && d=30; exp=\$(date -d "+\$d days" +%Y-%m-%d); jq --arg u "\$n" '.auth.config += [\$u]' "\$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "\$CONFIG_FILE"; jq --arg u "\$n" --arg e "\$exp" '.accounts += [{"user":\$u,"expired":\$e}]' "\$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "\$META_FILE"; systemctl restart "\$SERVICE_NAME"; send_tg "✅ <b>AKUN BARU</b>%0AUser: <code>\$n</code>%0AExp: <code>\$exp</code>";;
                 3) read -rp "User: " d; jq --arg u "\$d" '.auth.config |= map(select(. != \$u))' "\$CONFIG_FILE" > /tmp/c.tmp && mv /tmp/c.tmp "\$CONFIG_FILE"; jq --arg u "\$d" '.accounts |= map(select(.user != \$u))' "\$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "\$META_FILE"; systemctl restart "\$SERVICE_NAME"; echo "Dihapus."; sleep 1 ;;
                 4) systemctl restart "\$SERVICE_NAME"; echo "Restarted."; sleep 1 ;;
-                5) clear; uptime; free -h; df -h /; read -rp "Enter..." ;;
+                5) system_status ;;
                 6) cp "\$CONFIG_FILE" /etc/zivpn/backup_config.json; cp "\$META_FILE" /etc/zivpn/backup_meta.json; curl -s -F chat_id="\$TG_CHAT_ID" -F document=@/etc/zivpn/backup_config.json https://api.telegram.org/bot\$TG_BOT_TOKEN/sendDocument > /dev/null; curl -s -F chat_id="\$TG_CHAT_ID" -F document=@/etc/zivpn/backup_meta.json https://api.telegram.org/bot\$TG_BOT_TOKEN/sendDocument > /dev/null; echo "Backup terkirim!"; sleep 1 ;;
                 7) restore_accounts ;;
                 8) update_script ;;
@@ -237,16 +257,15 @@ case "\$1" in
 esac
 EOF
 
-# 6. Shortcut & Permission
+# 6. Finalize (Shortcut & Cron Job)
 chmod +x "$MANAGER_SCRIPT"
 echo "sudo bash $MANAGER_SCRIPT" > "$SHORTCUT"
 chmod +x "$SHORTCUT"
 
-# 7. Cron Job 00:00
 (crontab -l 2>/dev/null | grep -v "$MANAGER_SCRIPT cron") | crontab -
 (crontab -l 2>/dev/null; echo "0 0 * * * $MANAGER_SCRIPT cron") | crontab -
 
 clear
-echo "=================================================="
-echo "      INSTALASI SELESAI    "
-echo "=================================================="
+echo -e "\e[1;32m==================================================\e[0m"
+echo -e "\e[1;33m      INSTALASI SELESAI      \e[0m"
+echo -e "\e[1;32m==================================================\e[0m"
