@@ -3,7 +3,7 @@
 clear
 echo "=================================================="
 echo "      ZIVPN MANAGER INSTALLER"
-echo "    BY RICH NARENDRA X GEMINI AI"
+echo "    BY RICH NARENDRA X GEMINI"
 echo "=================================================="
 echo ""
 
@@ -60,11 +60,11 @@ mkdir -p /etc/zivpn
 [ ! -s "$CONFIG_FILE" ] && echo '{"auth":{"config":[]}, "listen":":5667"}' > "$CONFIG_FILE"
 [ ! -s "$META_FILE" ] && echo '{"accounts":[]}' > "$META_FILE"
 
-# 4. MENULIS SCRIPT MANAGER UTAMA (Upload isi ini ke GitHub)
+# 4. MENULIS SCRIPT MANAGER UTAMA
 cat <<EOF > "$MANAGER_SCRIPT"
 #!/bin/bash
 
-# --- IDENTITAS BOT (JANGAN DIHAPUS, AKAN DIISI OTOMATIS OLEH UPDATE) ---
+# --- IDENTITAS BOT ---
 TG_BOT_TOKEN="$TG_BOT_TOKEN"
 TG_CHAT_ID="$TG_CHAT_ID"
 GITHUB_URL="$GITHUB_RAW_URL"
@@ -103,21 +103,17 @@ update_script() {
     echo -e "Checking for updates..."
     wget -q -O /tmp/zivpn-new.sh "\$GITHUB_URL"
     if [ \$? -eq 0 ]; then
-        # SUNTIKKAN TOKEN & ID LAMA KE FILE BARU
         sed -i "s|TG_BOT_TOKEN=\".*\"|TG_BOT_TOKEN=\"\$TG_BOT_TOKEN\"|g" /tmp/zivpn-new.sh
         sed -i "s|TG_CHAT_ID=\".*\"|TG_CHAT_ID=\"\$TG_CHAT_ID\"|g" /tmp/zivpn-new.sh
-        
         mv /tmp/zivpn-new.sh "\$MANAGER_SCRIPT"
         chmod +x "\$MANAGER_SCRIPT"
-        echo -e "✅ Update Berhasil!"
-        sleep 1
+        echo -e "✅ Update Berhasil! Silakan ketik 'menu' kembali."
         exit 0
     else
         echo -e "❌ Gagal update."; sleep 2
     fi
 }
 
-# --- FUNGSI PENUNJANG ---
 send_tg() {
     curl -s -X POST "https://api.telegram.org/bot\$TG_BOT_TOKEN/sendMessage" -d chat_id="\$TG_CHAT_ID" -d parse_mode="HTML" --data-urlencode text="\$1" >/dev/null
 }
@@ -166,7 +162,7 @@ case "\$1" in
             echo -e "\e[1;32m================================================\e[0m"
             echo -e " 1) Lihat Akun       5) Status System"
             echo -e " 2) Tambah Akun      6) Backup Telegram"
-            echo -e " 3) Hapus Akun       7) Restore Akun"
+            echo -e " 3) Hapus Akun       7) Restore Akun (Coming Soon)"
             echo -e " 4) Restart Layanan  8) \e[1;33mUpdate Script\e[0m"
             echo -e " 0) Keluar"
             echo -e "\e[1;32m================================================\e[0m"
@@ -178,9 +174,10 @@ case "\$1" in
                 4) systemctl restart "\$SERVICE_NAME"; echo "Restarted."; sleep 1 ;;
                 5) system_status ;;
                 6) cp "\$CONFIG_FILE" /tmp/c.json; curl -s -F chat_id="\$TG_CHAT_ID" -F document=@/tmp/c.json https://api.telegram.org/bot\$TG_BOT_TOKEN/sendDocument > /dev/null; echo "Sent!"; sleep 1 ;;
-                7) # Fungsi Restore ;;
+                7) echo "Fitur Restore segera hadir..."; sleep 2 ;;
                 8) update_script ;;
                 0) exit 0 ;;
+                *) echo "Pilihan tidak valid."; sleep 1 ;;
             esac
         done
         ;;
@@ -198,5 +195,5 @@ chmod +x "$SHORTCUT"
 
 clear
 echo "=================================================="
-echo "      INSTALASI SELESAI "
+echo "      INSTALASI SELESAI"
 echo "=================================================="
