@@ -3,8 +3,12 @@
 # --- 1. PRE-INSTALLATION & DEPENDENCIES ---
 apt-get update -qq && apt-get install jq vnstat curl wget sudo lsb-release zip unzip net-tools cron iptables-persistent netfilter-persistent -y -qq
 
-# --- 2. FIREWALL PERSISTENCE (FITUR V73) ---
+# --- 2. FIREWALL PERSISTENCE (ENGINE V73) ---
+# Simpan rule yang ada
 netfilter-persistent save >/dev/null 2>&1
+# Reload agar efektif (Fungsi yang sempat hilang)
+netfilter-persistent reload >/dev/null 2>&1
+# Enable service
 systemctl enable netfilter-persistent >/dev/null 2>&1
 systemctl start netfilter-persistent >/dev/null 2>&1
 
@@ -49,7 +53,7 @@ send_notif() {
     fi
 }
 
-# --- SMART AUTO-SYNC (BACKGROUND PROCESS) ---
+# --- SMART AUTO-SYNC (ENGINE V73 - LENGKAP) ---
 sync_all() {
     {
         # 1. Force Listen 0.0.0.0
@@ -60,11 +64,13 @@ sync_all() {
             local FORCE_RESTART=true
         fi
 
-        # 2. Hapus User Expired
+        # 2. Hapus User Expired (Safe Date Check)
         local today=$(date +%s); local meta_changed=false
         while read -r acc; do
             [ -z "$acc" ] && continue
             local user=$(echo "$acc" | jq -r '.user'); local exp=$(echo "$acc" | jq -r '.expired')
+            
+            # Validasi tanggal agar tidak error numeric
             local exp_ts=$(date -d "$exp" +%s 2>/dev/null)
             if [ -n "$exp_ts" ] && [ "$today" -ge "$exp_ts" ]; then
                 jq --arg u "$user" '.accounts |= map(select(.user != $u))' "$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "$META_FILE"
@@ -73,7 +79,7 @@ sync_all() {
             fi
         done < <(jq -c '.accounts[]' "$META_FILE" 2>/dev/null)
 
-        # 3. Sync Meta -> Config (Fix Auth Wrong)
+        # 3. Sync Meta -> Config
         local USERS_META=$(jq -c '.accounts[].user' "$META_FILE" | sort | jq -s '.')
         local USERS_CONF=$(jq -c '.auth.config' "$CONFIG_FILE" | jq -r '.[]' | sort | jq -s '.')
 
@@ -84,6 +90,7 @@ sync_all() {
     } >/dev/null 2>&1
 }
 
+# Cron Handler
 if [ "$1" == "cron" ]; then sync_all; exit 0; fi
 
 # Fungsi Turbo Tweak
@@ -105,18 +112,21 @@ EOT
     fi
 }
 
-# --- UI FIX: TAMPILAN PRESISI ---
+# --- UI HEADER (LAYOUT V75) ---
 draw_header() {
     clear
     local IP=$(curl -s ifconfig.me || echo "No IP"); local UP=$(uptime -p | sed 's/up //')
-    
-    # Cek Port Service
     local CUR_PORT=$(jq -r '.listen' "$CONFIG_FILE" 2>/dev/null | cut -d':' -f2)
     local BIND_STAT=$(netstat -tulpn | grep ":$CUR_PORT " | grep -v ":::" | awk '{print $4}')
     
-    # Cek Bandwidth
+    # --- FIX VNSTAT PERMISSION (KEMBALI DARI V73) ---
     local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
+    if [ ! -d "/var/lib/vnstat" ]; then mkdir -p /var/lib/vnstat; fi
+    # Baris ini memastikan permission benar agar tidak error
+    chown vnstat:vnstat /var/lib/vnstat -R >/dev/null 2>&1 
     if [ ! -f "/var/lib/vnstat/$IF" ]; then vnstat --create -i "$IF" >/dev/null 2>&1; fi
+    # ------------------------------------------------
+
     local BW_JSON=$(vnstat -i "$IF" --json 2>/dev/null)
     local RX=0; local TX=0
     if [ -n "$BW_JSON" ]; then
@@ -124,49 +134,36 @@ draw_header() {
         RX=$(echo "$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == $T_Y and .date.month == $T_M and .date.day == $T_D) | .rx // 0" 2>/dev/null)
         TX=$(echo "$BW_JSON" | jq -r ".interfaces[0].traffic.day[] | select(.date.year == $T_Y and .date.month == $T_M and .date.day == $T_D) | .tx // 0" 2>/dev/null)
     fi
-    [[ -z "$RX" || "$RX" == "null" ]] && RX=0
-    [[ -z "$TX" || "$TX" == "null" ]] && TX=0
+    [[ -z "$RX" || "$RX" == "null" ]] && RX=0; [[ -z "$TX" || "$TX" == "null" ]] && TX=0
     local BW_STR="↓$(awk -v b="$RX" 'BEGIN {printf "%.2f", b/1024/1024}') MB | ↑$(awk -v b="$TX" 'BEGIN {printf "%.2f", b/1024/1024}') MB"
 
     echo -e "${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
-    echo -e "${C}┃${NC}        ${Y}ZIVPN MANAGER V74 (UI FIX)${NC}        ${C}┃${NC}"
+    echo -e "${C}┃${NC}       ${Y}ZIVPN MANAGER V76 (HYBRID)${NC}       ${C}┃${NC}"
     echo -e "${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
-    
-    # PERBAIKAN: Gunakan printf terpisah untuk warna agar padding akurat
-    
-    # Baris 1: IP Address
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "IP Address" "$IP"
-    
-    # Baris 2: Uptime (Potong jika terlalu panjang)
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Uptime" "${UP:0:26}"
-    
-    # Baris 3: Service Port (Warna Kondisional)
     if [[ ! -z "$BIND_STAT" ]]; then
         printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Service Port" "Running ($CUR_PORT)"
     else
         printf " ${C}┃${NC} %-12s : ${R}%-26s${NC} ${C}┃${NC}\n" "Service Port" "Service Down"
     fi
-    
-    # Baris 4: Turbo Tweak (Warna Kondisional)
     if [ -f "$TWEAK_FILE" ]; then
         printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Turbo Tweak" "ON"
     else
         printf " ${C}┃${NC} %-12s : ${R}%-26s${NC} ${C}┃${NC}\n" "Turbo Tweak" "OFF"
     fi
-    
-    # Baris 5: Daily BW
     printf " ${C}┃${NC} %-12s : ${Y}%-26s${NC} ${C}┃${NC}\n" "Daily BW" "$BW_STR"
-    
     echo -e "${C}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}"
 }
 
 while true; do
     sync_all; draw_header
-    echo -e "  ${C}[${Y}01${C}]${NC} Tambah Akun           ${C}[${Y}05${C}]${NC} Backup ZIP"
-    echo -e "  ${C}[${Y}02${C}]${NC} Hapus Akun            ${C}[${Y}06${C}]${NC} Restore ZIP"
-    echo -e "  ${C}[${Y}03${C}]${NC} Daftar Akun           ${C}[${Y}07${C}]${NC} Telegram Settings"
-    echo -e "  ${C}[${Y}04${C}]${NC} Restart Service       ${C}[${Y}08${C}]${NC} Turbo Tweaks"
-    echo -e "  ${C}[${Y}09${C}]${NC} Update Script         ${C}[${Y}00${C}]${NC} Keluar"
+    # Layout 1-5 Left, 6-0 Right (V75 Clean)
+    echo -e "  ${C}[${Y}1${C}]${NC} Tambah Akun            ${C}[${Y}6${C}]${NC} Restore ZIP"
+    echo -e "  ${C}[${Y}2${C}]${NC} Hapus Akun             ${C}[${Y}7${C}]${NC} Telegram Settings"
+    echo -e "  ${C}[${Y}3${C}]${NC} Daftar Akun            ${C}[${Y}8${C}]${NC} Turbo Tweaks"
+    echo -e "  ${C}[${Y}4${C}]${NC} Restart Service        ${C}[${Y}9${C}]${NC} Update Script"
+    echo -e "  ${C}[${Y}5${C}]${NC} Backup ZIP             ${C}[${Y}0${C}]${NC} Keluar"
     echo -e "${C}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -ne "  ${B}Pilih Menu${NC}: " && read -r choice
     case $choice in
@@ -264,5 +261,5 @@ echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT" && chmod +x "$SHO
 (crontab -l 2>/dev/null; echo "@reboot /usr/local/bin/zivpn-manager.sh cron") | crontab -
 
 clear
-echo -e "${G}✅ V74 UI PERFECTED INSTALLED!${NC}"
-echo -e "Tampilan menu utama sekarang rapi dan presisi."
+echo -e "${G}✅ V76 HYBRID INSTALLED!${NC}"
+echo -e "Menggabungkan Kestabilan V73 (Fix Permission) dengan Layout Rapih V75."
