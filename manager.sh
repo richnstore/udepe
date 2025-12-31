@@ -138,7 +138,7 @@ draw_header() {
     local BW_STR="↓$(awk -v b="$RX" 'BEGIN {printf "%.2f", b/1024/1024}') MB | ↑$(awk -v b="$TX" 'BEGIN {printf "%.2f", b/1024/1024}') MB"
 
     echo -e "${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
-    echo -e "${C}┃${NC}       ${Y}ZIVPN MANAGER V76 (HYBRID)${NC}       ${C}┃${NC}"
+    echo -e "${C}┃${NC}       ${Y}UDP ZIVPN MANAGER${NC}       ${C}┃${NC}"
     echo -e "${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "IP Address" "$IP"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Uptime" "${UP:0:26}"
@@ -168,6 +168,7 @@ while true; do
     echo -ne "  ${B}Pilih Menu${NC}: " && read -r choice
     case $choice in
         1|01) 
+            echo -e "  ${Y}=== TAMBAH AKUN ===${NC}"
             echo -ne "  User: " && read -r n
             if [ -z "$n" ]; then echo -e "  ${R}Batal: User kosong!${NC}"; wait_enter; continue; fi
             echo -ne "  Hari: " && read -r d
@@ -179,7 +180,7 @@ while true; do
         2|02) 
             mapfile -t LIST < <(jq -r '.accounts[].user' "$META_FILE")
             if [ ${#LIST[@]} -eq 0 ]; then echo -e "  ${R}Tidak ada user.${NC}"; wait_enter; continue; fi
-            echo -e "  ${Y}=== HAPUS USER ===${NC}"
+            echo -e "  ${Y}=== HAPUS AKUN ===${NC}"
             i=1; for u in "${LIST[@]}"; do echo "  $i. $u"; ((i++)); done
             echo -ne "  Pilih No (Enter=Batal): " && read -r idx
             if [[ "$idx" =~ ^[0-9]+$ ]] && [ "$idx" -ge 1 ] && [ "$idx" -le "${#LIST[@]}" ]; then
@@ -189,7 +190,7 @@ while true; do
                 echo -e "  ${G}Sukses: $target dihapus.${NC}";
             else echo -e "  ${Y}Dibatalkan.${NC}"; fi; wait_enter ;;
         3|03) 
-            echo -e "\n  ${Y}=== DAFTAR AKUN ZIVPN ===${NC}"
+            echo -e "\n  ${Y}=== DAFTAR AKUN ===${NC}"
             printf "  ${B}%-4s %-16s %-12s${NC}\n" "NO" "USERNAME" "EXPIRED"
             echo "  ------------------------------------"
             i=1
@@ -220,10 +221,11 @@ while true; do
             fi; wait_enter ;;
         7|07)
             while true; do
-                clear; echo -e "${C}=== TELEGRAM ===${NC}"
+                clear; echo -e "${Y}=== TELEGRAM SETTING ===${NC}"
                 echo -e "  Token: ${TG_BOT_TOKEN:-Belum Diset}"
                 echo -e "  ID   : ${TG_CHAT_ID:-Belum Diset}"
-                echo -e "  1. Ubah | 0. Kembali"
+                echo -e "  1. Ubah Token Bot & ID Chat"
+                echo -e "  0. Kembali"
                 echo -ne "  Pilih: " && read -r o
                 case $o in
                     1) echo -ne "  Token: " && read -r NT; echo -ne "  ID: " && read -r NI; 
@@ -261,5 +263,5 @@ echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT" && chmod +x "$SHO
 (crontab -l 2>/dev/null; echo "@reboot /usr/local/bin/zivpn-manager.sh cron") | crontab -
 
 clear
-echo -e "${G}✅ V76 HYBRID INSTALLED!${NC}"
-echo -e "Menggabungkan Kestabilan V73 (Fix Permission) dengan Layout Rapih V75."
+echo -e "${G}✅INSTALLED!${NC}"
+echo -e "Membuka Menu"
