@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # ==========================================
-# ZIVPN MANAGER V80 (FINAL ISP FIX)
+# UDP ZIVPN MANAGER 
 # ==========================================
 
 # --- 1. PRE-INSTALLATION & DEPENDENCIES ---
 # Tambahan: 'certbot' untuk SSL, 'jq' untuk JSON parsing
 apt-get update -qq && apt-get install jq vnstat curl wget sudo lsb-release zip unzip net-tools cron iptables-persistent netfilter-persistent certbot -y -qq
 
-# --- 2. FIREWALL PERSISTENCE (ENGINE V73) ---
+# --- 2. FIREWALL PERSISTENCE ---
 # Simpan rule yang ada saat ini
 netfilter-persistent save >/dev/null 2>&1
 # Reload agar efektif
@@ -173,12 +173,12 @@ draw_header() {
 while true; do
     sync_all; draw_header
     # Layout Updated: 1-5 Left, 6-0 Right (Update moved to 10)
-    echo -e "  ${C}[${Y}1${C}]${NC} Tambah Akun            ${C}[${Y}6${C}]${NC} Restore ZIP"
-    echo -e "  ${C}[${Y}2${C}]${NC} Hapus Akun             ${C}[${Y}7${C}]${NC} Telegram Settings"
-    echo -e "  ${C}[${Y}3${C}]${NC} Daftar Akun            ${C}[${Y}8${C}]${NC} Turbo Tweaks"
+    echo -e "  ${C}[${Y}1${C}]${NC} Add Account            ${C}[${Y}6${C}]${NC} Restore"
+    echo -e "  ${C}[${Y}2${C}]${NC} Delete Account         ${C}[${Y}7${C}]${NC} Bot Settings"
+    echo -e "  ${C}[${Y}3${C}]${NC} List Akun              ${C}[${Y}8${C}]${NC} Turbo Tweaks"
     echo -e "  ${C}[${Y}4${C}]${NC} Restart Service        ${C}[${Y}9${C}]${NC} Set Domain (SSL)"
-    echo -e "  ${C}[${Y}5${C}]${NC} Backup ZIP             ${C}[${Y}10${C}]${NC} Update Script"
-    echo -e "                                 ${C}[${Y}0${C}]${NC} Keluar"
+    echo -e "  ${C}[${Y}5${C}]${NC} Backup                 ${C}[${Y}10${C}]${NC} Update Script"
+    echo -e "                               ${C}[${Y}0${C}]${NC} Exit"
     echo -e "${C}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -ne "  ${B}Pilih Menu${NC}: " && read -r choice
     case $choice in
@@ -253,7 +253,7 @@ while true; do
             fi; wait_enter ;;
         7|07)
             while true; do
-                clear; echo -e "${Y}=== TELEGRAM SETTING ===${NC}"
+                clear; echo -e "${Y}=== BOT SETTINGS ===${NC}"
                 echo -e "  Token: ${TG_BOT_TOKEN:-Belum Diset}"
                 echo -e "  ID   : ${TG_CHAT_ID:-Belum Diset}"
                 echo -e "  1. Ubah Token Bot & ID Chat"
@@ -318,5 +318,5 @@ echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT" && chmod +x "$SHO
 (crontab -l 2>/dev/null; echo "@reboot /usr/local/bin/zivpn-manager.sh cron") | crontab -
 
 clear
-echo -e "${G}✅INSTALLED V80!${NC}"
+echo -e "${G}✅INSTALLED!${NC}"
 echo -e "Silakan ketik 'menu' untuk memulai."
