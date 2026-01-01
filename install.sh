@@ -2,7 +2,7 @@
 
 echo "===================================="
 echo "   ZIVPN FULL AUTO INSTALLER"
-echo "   Repo: richnstore/udepe"
+echo "   BY RICH NARENDRA"
 echo "===================================="
 
 # ==============================
