@@ -123,7 +123,6 @@ draw_header() {
     local BIND_STAT=$(netstat -tulpn | grep ":$CUR_PORT " | grep -v ":::" | awk '{print $4}')
     
     # --- LOGIKA TAMPILAN DOMAIN ---
-    # Jika file domain ada isinya, tampilkan Domain. Jika tidak, tampilkan IP.
     if [ -s "$DOMAIN_FILE" ]; then
         local LABEL_IP="Domain"
         local VAL_IP=$(cat "$DOMAIN_FILE")
@@ -137,7 +136,6 @@ draw_header() {
     if [ ! -d "/var/lib/vnstat" ]; then mkdir -p /var/lib/vnstat; fi
     chown vnstat:vnstat /var/lib/vnstat -R >/dev/null 2>&1 
     if [ ! -f "/var/lib/vnstat/$IF" ]; then vnstat --create -i "$IF" >/dev/null 2>&1; fi
-    # -----------------------------
 
     local BW_JSON=$(vnstat -i "$IF" --json 2>/dev/null)
     local RX=0; local TX=0
@@ -152,7 +150,6 @@ draw_header() {
     echo -e "${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
     echo -e "${C}┃${NC}       ${Y}UDP ZIVPN MANAGER${NC}       ${C}┃${NC}"
     echo -e "${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
-    # Menggunakan Variable LABEL_IP dan VAL_IP (dipotong 26 karakter agar rapi)
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "$LABEL_IP" "${VAL_IP:0:26}"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Uptime" "${UP:0:26}"
     if [[ ! -z "$BIND_STAT" ]]; then
@@ -171,7 +168,6 @@ draw_header() {
 
 while true; do
     sync_all; draw_header
-    # Layout Updated: 1-5 Left, 6-0 Right (Update moved to 10)
     echo -e "  ${C}[${Y}1${C}]${NC} Tambah Akun            ${C}[${Y}6${C}]${NC} Restore ZIP"
     echo -e "  ${C}[${Y}2${C}]${NC} Hapus Akun             ${C}[${Y}7${C}]${NC} Telegram Settings"
     echo -e "  ${C}[${Y}3${C}]${NC} Daftar Akun            ${C}[${Y}8${C}]${NC} Turbo Tweaks"
@@ -188,8 +184,25 @@ while true; do
             echo -ne "  Hari: " && read -r d
             if [[ ! "$d" =~ ^[0-9]+$ ]]; then echo -e "  ${R}Batal: Hari harus angka!${NC}"; wait_enter; continue; fi
             exp=$(date -d "+$d days" +%Y-%m-%d)
+            
+            # --- UPDATE LOGIC (GET HOST & ISP) ---
+            # 1. Cek Domain/IP
+            if [ -s "$DOMAIN_FILE" ]; then
+                MY_HOST=$(cat "$DOMAIN_FILE")
+            else
+                MY_HOST=$(curl -s ifconfig.me)
+            fi
+            # 2. Cek ISP
+            echo -e "  ${Y}Mengambil data ISP...${NC}"
+            MY_ISP=$(curl -s https://ipapi.co/org)
+            if [ -z "$MY_ISP" ]; then MY_ISP="Unknown ISP"; fi
+
             jq --arg u "$n" --arg e "$exp" '.accounts += [{"user":$u,"expired":$e}]' "$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "$META_FILE"
-            sync_all; send_notif "✅ <b>NEW USER</b>%0AUser: <code>$n</code>%0AExp: $exp"
+            sync_all
+            
+            # 3. Kirim Notif Lengkap
+            send_notif "✅ <b>NEW USER CREATED</b>%0AUser: <code>$n</code>%0AExp: $exp%0AHost: <code>$MY_HOST</code>%0AISP: $MY_ISP"
+            
             echo -e "  ${G}Sukses: User $n Aktif.${NC}"; wait_enter ;;
         2|02) 
             mapfile -t LIST < <(jq -r '.accounts[].user' "$META_FILE")
@@ -301,4 +314,4 @@ echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT" && chmod +x "$SHO
 
 clear
 echo -e "${G}✅INSTALLED!${NC}"
-echo -e "Menu [09] SSL & Fitur Tampilan Domain telah ditambahkan."
+echo -e "Update: Notifikasi Telegram sekarang menyertakan IP/Domain dan ISP."
