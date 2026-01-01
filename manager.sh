@@ -1,12 +1,13 @@
 #!/bin/bash
 
 # --- 1. PRE-INSTALLATION & DEPENDENCIES ---
-apt-get update -qq && apt-get install jq vnstat curl wget sudo lsb-release zip unzip net-tools cron iptables-persistent netfilter-persistent -y -qq
+# Tambahan: 'certbot' untuk SSL
+apt-get update -qq && apt-get install jq vnstat curl wget sudo lsb-release zip unzip net-tools cron iptables-persistent netfilter-persistent certbot -y -qq
 
 # --- 2. FIREWALL PERSISTENCE (ENGINE V73) ---
 # Simpan rule yang ada
 netfilter-persistent save >/dev/null 2>&1
-# Reload agar efektif (Fungsi yang sempat hilang)
+# Reload agar efektif
 netfilter-persistent reload >/dev/null 2>&1
 # Enable service
 systemctl enable netfilter-persistent >/dev/null 2>&1
@@ -17,6 +18,7 @@ CONFIG_DIR="/etc/zivpn"
 CONFIG_FILE="/etc/zivpn/config.json"
 META_FILE="/etc/zivpn/accounts_meta.json"
 TG_CONF="/etc/zivpn/telegram.conf"
+DOMAIN_FILE="/etc/zivpn/domain"
 TWEAK_FILE="/etc/sysctl.d/99-zivpn-turbo.conf"
 MANAGER_PATH="/usr/local/bin/zivpn-manager.sh"
 SHORTCUT="/usr/local/bin/menu"
@@ -33,6 +35,7 @@ MANAGER_PATH="/usr/local/bin/zivpn-manager.sh"
 TG_CONF="/etc/zivpn/telegram.conf"; [ -f "$TG_CONF" ] && source "$TG_CONF"
 CONFIG_FILE="/etc/zivpn/config.json"
 META_FILE="/etc/zivpn/accounts_meta.json"
+DOMAIN_FILE="/etc/zivpn/domain"
 TWEAK_FILE="/etc/sysctl.d/99-zivpn-turbo.conf"
 SERVICE_NAME="zivpn.service"
 
@@ -112,20 +115,29 @@ EOT
     fi
 }
 
-# --- UI HEADER (LAYOUT V75) ---
+# --- UI HEADER (DYNAMIC DOMAIN/IP DISPLAY) ---
 draw_header() {
     clear
     local IP=$(curl -s ifconfig.me || echo "No IP"); local UP=$(uptime -p | sed 's/up //')
     local CUR_PORT=$(jq -r '.listen' "$CONFIG_FILE" 2>/dev/null | cut -d':' -f2)
     local BIND_STAT=$(netstat -tulpn | grep ":$CUR_PORT " | grep -v ":::" | awk '{print $4}')
     
-    # --- FIX VNSTAT PERMISSION (KEMBALI DARI V73) ---
+    # --- LOGIKA TAMPILAN DOMAIN ---
+    # Jika file domain ada isinya, tampilkan Domain. Jika tidak, tampilkan IP.
+    if [ -s "$DOMAIN_FILE" ]; then
+        local LABEL_IP="Domain"
+        local VAL_IP=$(cat "$DOMAIN_FILE")
+    else
+        local LABEL_IP="IP Address"
+        local VAL_IP="$IP"
+    fi
+
+    # --- FIX VNSTAT PERMISSION ---
     local IF=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
     if [ ! -d "/var/lib/vnstat" ]; then mkdir -p /var/lib/vnstat; fi
-    # Baris ini memastikan permission benar agar tidak error
     chown vnstat:vnstat /var/lib/vnstat -R >/dev/null 2>&1 
     if [ ! -f "/var/lib/vnstat/$IF" ]; then vnstat --create -i "$IF" >/dev/null 2>&1; fi
-    # ------------------------------------------------
+    # -----------------------------
 
     local BW_JSON=$(vnstat -i "$IF" --json 2>/dev/null)
     local RX=0; local TX=0
@@ -140,7 +152,8 @@ draw_header() {
     echo -e "${C}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
     echo -e "${C}┃${NC}       ${Y}UDP ZIVPN MANAGER${NC}       ${C}┃${NC}"
     echo -e "${C}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
-    printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "IP Address" "$IP"
+    # Menggunakan Variable LABEL_IP dan VAL_IP (dipotong 26 karakter agar rapi)
+    printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "$LABEL_IP" "${VAL_IP:0:26}"
     printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Uptime" "${UP:0:26}"
     if [[ ! -z "$BIND_STAT" ]]; then
         printf " ${C}┃${NC} %-12s : ${G}%-26s${NC} ${C}┃${NC}\n" "Service Port" "Running ($CUR_PORT)"
@@ -158,12 +171,13 @@ draw_header() {
 
 while true; do
     sync_all; draw_header
-    # Layout 1-5 Left, 6-0 Right (V75 Clean)
+    # Layout Updated: 1-5 Left, 6-0 Right (Update moved to 10)
     echo -e "  ${C}[${Y}1${C}]${NC} Tambah Akun            ${C}[${Y}6${C}]${NC} Restore ZIP"
     echo -e "  ${C}[${Y}2${C}]${NC} Hapus Akun             ${C}[${Y}7${C}]${NC} Telegram Settings"
     echo -e "  ${C}[${Y}3${C}]${NC} Daftar Akun            ${C}[${Y}8${C}]${NC} Turbo Tweaks"
-    echo -e "  ${C}[${Y}4${C}]${NC} Restart Service        ${C}[${Y}9${C}]${NC} Update Script"
-    echo -e "  ${C}[${Y}5${C}]${NC} Backup ZIP             ${C}[${Y}0${C}]${NC} Keluar"
+    echo -e "  ${C}[${Y}4${C}]${NC} Restart Service        ${C}[${Y}9${C}]${NC} Set Domain (SSL)"
+    echo -e "  ${C}[${Y}5${C}]${NC} Backup ZIP             ${C}[${Y}10${C}]${NC} Update Script"
+    echo -e "                                 ${C}[${Y}0${C}]${NC} Keluar"
     echo -e "${C}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -ne "  ${B}Pilih Menu${NC}: " && read -r choice
     case $choice in
@@ -238,6 +252,29 @@ while true; do
             echo -ne "  Pilih: " && read -r tw
             [ "$tw" == "1" ] && manage_tweaks "on"; [ "$tw" == "2" ] && manage_tweaks "off"; wait_enter ;;
         9|09)
+            echo -e "  ${Y}=== SETUP DOMAIN & SSL ===${NC}"
+            echo -e "  Pastikan domain sudah diarahkan ke IP VPS ini!"
+            echo -ne "  Masukkan Domain (cth: vpn.domain.com): " && read -r domain
+            if [ -z "$domain" ]; then echo -e "  ${R}Domain kosong!${NC}"; wait_enter; continue; fi
+            echo -e "  ${Y}Stop service sebentar...${NC}"
+            systemctl stop "$SERVICE_NAME"
+            echo -e "  ${Y}Request SSL via Certbot...${NC}"
+            certbot certonly --standalone --preferred-challenges http --agree-tos --register-unsafely-without-email -d "$domain"
+            if [ -f "/etc/letsencrypt/live/$domain/fullchain.pem" ]; then
+                echo -e "  ${G}SSL Berhasil didapatkan!${NC}"
+                cp "/etc/letsencrypt/live/$domain/fullchain.pem" "/etc/zivpn/zivpn.crt"
+                cp "/etc/letsencrypt/live/$domain/privkey.pem" "/etc/zivpn/zivpn.key"
+                chmod 644 /etc/zivpn/zivpn.crt
+                chmod 600 /etc/zivpn/zivpn.key
+                echo "$domain" > "$DOMAIN_FILE"
+                systemctl start "$SERVICE_NAME"
+                echo -e "  ${G}Sukses! Domain $domain terpasang.${NC}"
+            else
+                echo -e "  ${R}Gagal request SSL. Cek pointing domain/port 80.${NC}"
+                systemctl start "$SERVICE_NAME"
+            fi
+            wait_enter ;;
+        10)
             echo -e "  ${Y}Sedang mengecek update...${NC}"
             wget -q -O /tmp/z.sh "https://raw.githubusercontent.com/richnstore/udepe/main/manager.sh"
             if [ -s /tmp/z.sh ]; then
@@ -264,4 +301,4 @@ echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT" && chmod +x "$SHO
 
 clear
 echo -e "${G}✅INSTALLED!${NC}"
-echo -e "Membuka Menu"
+echo -e "Menu [09] SSL & Fitur Tampilan Domain telah ditambahkan."
