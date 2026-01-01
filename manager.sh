@@ -1,15 +1,19 @@
 #!/bin/bash
 
+# ==========================================
+# ZIVPN MANAGER V80 (FINAL ISP FIX)
+# ==========================================
+
 # --- 1. PRE-INSTALLATION & DEPENDENCIES ---
-# Tambahan: 'certbot' untuk SSL
+# Tambahan: 'certbot' untuk SSL, 'jq' untuk JSON parsing
 apt-get update -qq && apt-get install jq vnstat curl wget sudo lsb-release zip unzip net-tools cron iptables-persistent netfilter-persistent certbot -y -qq
 
 # --- 2. FIREWALL PERSISTENCE (ENGINE V73) ---
-# Simpan rule yang ada
+# Simpan rule yang ada saat ini
 netfilter-persistent save >/dev/null 2>&1
 # Reload agar efektif
 netfilter-persistent reload >/dev/null 2>&1
-# Enable service
+# Enable service agar jalan saat reboot
 systemctl enable netfilter-persistent >/dev/null 2>&1
 systemctl start netfilter-persistent >/dev/null 2>&1
 
@@ -56,10 +60,10 @@ send_notif() {
     fi
 }
 
-# --- SMART AUTO-SYNC (ENGINE V73 - LENGKAP) ---
+# --- SMART AUTO-SYNC (AUTO HEALING & EXPIRED CHECKER) ---
 sync_all() {
     {
-        # 1. Force Listen 0.0.0.0
+        # 1. Force Listen 0.0.0.0 (Safety)
         local CUR_L=$(jq -r '.listen // "0.0.0.0:5667"' "$CONFIG_FILE")
         if [[ "$CUR_L" != "0.0.0.0:"* ]]; then
             local PORT=$(echo "$CUR_L" | grep -oE '[0-9]+$'); [ -z "$PORT" ] && PORT="5667"
@@ -67,7 +71,7 @@ sync_all() {
             local FORCE_RESTART=true
         fi
 
-        # 2. Hapus User Expired (Safe Date Check)
+        # 2. Hapus User Expired (Jalan Tiap Menit via Cron)
         local today=$(date +%s); local meta_changed=false
         while read -r acc; do
             [ -z "$acc" ] && continue
@@ -77,12 +81,12 @@ sync_all() {
             local exp_ts=$(date -d "$exp" +%s 2>/dev/null)
             if [ -n "$exp_ts" ] && [ "$today" -ge "$exp_ts" ]; then
                 jq --arg u "$user" '.accounts |= map(select(.user != $u))' "$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "$META_FILE"
-                send_notif "🚫 <b>EXPIRED</b>: <code>$user</code>"
+                send_notif "🚫 <b>EXPIRED USER DELETED</b>%0AUser: <code>$user</code>"
                 meta_changed=true
             fi
         done < <(jq -c '.accounts[]' "$META_FILE" 2>/dev/null)
 
-        # 3. Sync Meta -> Config
+        # 3. Sync Meta -> Config (Fix Auth Wrong)
         local USERS_META=$(jq -c '.accounts[].user' "$META_FILE" | sort | jq -s '.')
         local USERS_CONF=$(jq -c '.auth.config' "$CONFIG_FILE" | jq -r '.[]' | sort | jq -s '.')
 
@@ -168,6 +172,7 @@ draw_header() {
 
 while true; do
     sync_all; draw_header
+    # Layout Updated: 1-5 Left, 6-0 Right (Update moved to 10)
     echo -e "  ${C}[${Y}1${C}]${NC} Tambah Akun            ${C}[${Y}6${C}]${NC} Restore ZIP"
     echo -e "  ${C}[${Y}2${C}]${NC} Hapus Akun             ${C}[${Y}7${C}]${NC} Telegram Settings"
     echo -e "  ${C}[${Y}3${C}]${NC} Daftar Akun            ${C}[${Y}8${C}]${NC} Turbo Tweaks"
@@ -185,17 +190,17 @@ while true; do
             if [[ ! "$d" =~ ^[0-9]+$ ]]; then echo -e "  ${R}Batal: Hari harus angka!${NC}"; wait_enter; continue; fi
             exp=$(date -d "+$d days" +%Y-%m-%d)
             
-            # --- UPDATE LOGIC (GET HOST & ISP) ---
+            # --- UPDATE LOGIC (GET HOST & ISP FIX v80) ---
             # 1. Cek Domain/IP
             if [ -s "$DOMAIN_FILE" ]; then
                 MY_HOST=$(cat "$DOMAIN_FILE")
             else
                 MY_HOST=$(curl -s ifconfig.me)
             fi
-            # 2. Cek ISP
+            # 2. Cek ISP (Ganti ke ip-api.com agar tidak kena rate limit)
             echo -e "  ${Y}Mengambil data ISP...${NC}"
-            MY_ISP=$(curl -s https://ipapi.co/org)
-            if [ -z "$MY_ISP" ]; then MY_ISP="Unknown ISP"; fi
+            MY_ISP=$(curl -s http://ip-api.com/json | jq -r '.isp')
+            if [ -z "$MY_ISP" ] || [ "$MY_ISP" == "null" ]; then MY_ISP="Unknown ISP"; fi
 
             jq --arg u "$n" --arg e "$exp" '.accounts += [{"user":$u,"expired":$e}]' "$META_FILE" > /tmp/m.tmp && mv /tmp/m.tmp "$META_FILE"
             sync_all
@@ -307,11 +312,11 @@ EOF
 chmod +x "/usr/local/bin/zivpn-manager.sh"
 echo "sudo bash /usr/local/bin/zivpn-manager.sh" > "$SHORTCUT" && chmod +x "$SHORTCUT"
 
-# INSTALL CRON
+# INSTALL CRON (Auto-Expired, Auto-Sync)
 (crontab -l 2>/dev/null | grep -v "zivpn-manager.sh") | crontab -
 (crontab -l 2>/dev/null; echo "* * * * * /usr/local/bin/zivpn-manager.sh cron") | crontab -
 (crontab -l 2>/dev/null; echo "@reboot /usr/local/bin/zivpn-manager.sh cron") | crontab -
 
 clear
-echo -e "${G}✅INSTALLED!${NC}"
-echo -e "Update: Notifikasi Telegram sekarang menyertakan IP/Domain dan ISP."
+echo -e "${G}✅INSTALLED V80!${NC}"
+echo -e "Silakan ketik 'menu' untuk memulai."
